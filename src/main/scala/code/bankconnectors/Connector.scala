@@ -5,10 +5,12 @@ import java.util.Date
 import code.api.util.APIUtil._
 import code.api.util.ApiRole._
 import code.api.util.ErrorMessages
-import code.api.v2_1_0.{TransactionRequestDetailsFreeFormJSON, TransactionRequestDetailsSEPAJSON, TransactionRequestDetailsSandBoxTanJSON}
+import code.api.v2_1_0._
+import code.branches.Branches.{Branch, BranchId}
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
 import code.model.{Transaction, User, _}
+import code.model.dataAccess.APIUser
 import code.transactionrequests.TransactionRequests
 import code.transactionrequests.TransactionRequests._
 import code.util.Helper._
@@ -16,6 +18,7 @@ import net.liftweb.common.{Box, Empty, Failure, Full}
 import net.liftweb.json
 import net.liftweb.util.Helpers._
 import net.liftweb.util.{Props, SimpleInjector}
+import code.products.Products.{Product, ProductCode}
 
 import scala.math.BigInt
 import scala.util.Random
@@ -37,33 +40,35 @@ Could consider a Map of ("resourceType" -> "provider") - this could tell us whic
 
 object Connector  extends SimpleInjector {
 
+  import scala.reflect.runtime.universe._
+  def getObjectInstance(clsName: String):Connector = {
+    val mirror = runtimeMirror(getClass.getClassLoader)
+    val module = mirror.staticModule(clsName)
+    mirror.reflectModule(module).instance.asInstanceOf[Connector]
+  }
+
   val connector = new Inject(buildOne _) {}
 
   def buildOne: Connector = {
     val connectorProps = Props.get("connector").openOrThrowException("no connector set")
 
-    val kafka_version = """^(kafka)_(lib)_(v[0-9\.]+)$""".r
+    val kafka_version = """^(kafka)_(lib)_(v[A-Za-z0-9\.]+)$""".r
 
     connectorProps match {
       case "mapped" => LocalMappedConnector
       case "mongodb" => LocalConnector
       case "kafka" => KafkaMappedConnector
       case kafka_version(kafka, lib, version) => 
-                                                 println("===>" + kafka)
-                                                 println("===>" + lib)
-                                                 println("===>" + version)
-                                                 KafkaLibMappedConnector(version)
+       val objVersion = version.replaceAll("\\.", "_")
+       if (lib == "lib")
+         //if (objVersion == "v2016_11_RC2")
+         //  KafkaLibMappedConnector_v2016_11_RC2
+         //else
+           KafkaLibMappedConnector
+           //getObjectInstance("code.bankconnectors.KafkaLibMappedConnector_" + objVersion)
+       else
+         null
     }
-//
-//    if (connectorProps.startsWith("kafka_lib")) {
-//      KafkaLibMappedConnector
-//    } else {
-//      connectorProps match {
-//        case "mapped" => LocalMappedConnector
-//        case "mongodb" => LocalConnector
-//        case "kafka" => KafkaMappedConnector
-//      }
-//    }
   }
 
 }
@@ -112,11 +117,21 @@ trait Connector {
     } yield a
   }
 
+  case class InboundUser( email : String,
+                          password : String,
+                          display_name : String )
+
+  def getUser(name: String, password: String): Box[InboundUser]
+
+  def updateUserAccountViews(user: APIUser)
+
   def getBankAccount(bankId : BankId, accountId : AccountId) : Box[AccountType]
 
-  def getCounterparty(bankId: BankId, accountID : AccountId, counterpartyID : String) : Box[Counterparty]
+  def getCounterpartyFromTransaction(bankId: BankId, accountID : AccountId, counterpartyID : String) : Box[Counterparty]
 
-  def getCounterparties(bankId: BankId, accountID : AccountId): List[Counterparty]
+  def getCounterpartiesFromTransaction(bankId: BankId, accountID : AccountId): List[Counterparty]
+
+  def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty]
 
   def getTransactions(bankId: BankId, accountID: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]]
 
@@ -395,7 +410,9 @@ trait Connector {
         case "SANDBOX_TAN" => Connector.connector.vend.makePaymentv200(initiator, BankAccountUID(fromAccount.bankId, fromAccount.accountId),
           BankAccountUID(toAccount.get.bankId, toAccount.get.accountId), BigDecimal(details.value.amount), details.asInstanceOf[TransactionRequestDetailsSandBoxTan].description)
         case "SEPA" => Connector.connector.vend.makePaymentv200(initiator, BankAccountUID(fromAccount.bankId, fromAccount.accountId),
-          BankAccountUID(toAccount.get.bankId, toAccount.get.accountId), BigDecimal(details.value.amount), details.asInstanceOf[TransactionRequestDetailsSandBoxTan].description)
+          BankAccountUID(toAccount.get.bankId, toAccount.get.accountId), BigDecimal(details.value.amount), details.asInstanceOf[TransactionRequestDetailsSEPAResponse].description)
+        case "FREE_FORM" => Connector.connector.vend.makePaymentv200(initiator, BankAccountUID(fromAccount.bankId, fromAccount.accountId),
+          BankAccountUID(toAccount.get.bankId, toAccount.get.accountId), BigDecimal(details.value.amount), "")
       }
 
       //set challenge to null
@@ -684,4 +701,12 @@ trait Connector {
 
   def updateAccountLabel(bankId: BankId, accountId: AccountId, label: String): Boolean
 
-  }
+  def getProducts(bankId : BankId) : Box[List[Product]]
+
+  def getProduct(bankId : BankId, productCode : ProductCode) : Box[Product]
+
+  def createOrUpdateBranch(branch: BranchJsonPost): Box[Branch]
+
+  def getBranch(bankId : BankId, branchId: BranchId) : Box[Branch]
+
+}

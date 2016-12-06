@@ -34,8 +34,7 @@ package code.model.dataAccess
 import java.util.UUID
 
 import code.api.{DirectLogin, OAuthHandshake}
-import code.bankconnectors.KafkaMappedConnector
-import code.bankconnectors.KafkaMappedConnector.KafkaInboundUser
+import code.bankconnectors.Connector
 import net.liftweb.common._
 import net.liftweb.http.js.JsCmds.FocusOnLoad
 import net.liftweb.http.{S, SHtml, SessionVar, Templates}
@@ -353,11 +352,11 @@ import net.liftweb.util.Helpers._
         }
         else {
           if (Props.getBool("kafka.user.authentication", false)) {
-          Props.get("connector").openOrThrowException("no connector set") match {
-            case "kafka" =>
+          Props.get("connector").openOrThrowException("no connector set").startsWith("kafka") match {
+            case true =>
               for { kafkaUser <- getUserFromKafka(name, password)
                     kafkaUserId <- tryo{kafkaUser.user} } yield kafkaUserId.toLong
-            case _ => Empty
+            case false => Empty
           }
         } else {
             Empty }
@@ -369,8 +368,8 @@ import net.liftweb.util.Helpers._
 
 
   def getUserFromKafka(name: String, password: String):Box[OBPUser] = {
-    KafkaMappedConnector.getUser(name, password) match {
-      case Full(KafkaInboundUser(extEmail, extPassword, extUsername)) => {
+    Connector.connector.vend.getUser(name, password) match {
+      case Full(Connector.connector.vend.InboundUser(extEmail, extPassword, extUsername)) => {
         info("external user authenticated. login redir: " + loginRedirect.get)
         val redir = loginRedirect.get match {
           case Full(url) =>
@@ -447,7 +446,7 @@ import net.liftweb.util.Helpers._
         case Full(user) if !user.validated_? =>
           S.error(S.?("account.validation.error"))
 
-        case _ => if (Props.get("connector").openOrThrowException("no connector set") == "kafka")
+        case _ => if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka"))
         {
           // If not found locally, try to authenticate user via Kafka, if enabled in props
           if (Props.getBool("kafka.user.authentication", false)) {
@@ -486,11 +485,11 @@ import net.liftweb.util.Helpers._
 
 
   def externalUserHelper(name: String, password: String): Box[OBPUser] = {
-    if (Props.get("connector").openOrThrowException("no connector set") == "kafka") {
+    if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka")) {
       for {
        user <- getUserFromKafka(name, password)
        u <- APIUser.find(By(APIUser.name_, user.username))
-       v <- tryo {KafkaMappedConnector.updateUserAccountViews(u)}
+       v <- tryo {Connector.connector.vend.updateUserAccountViews(u)}
       } yield {
         user
       }
@@ -499,10 +498,10 @@ import net.liftweb.util.Helpers._
 
 
   def registeredUserHelper(username: String) = {
-    if (Props.get("connector").openOrThrowException("no connector set") == "kafka") {
+    if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka")) {
       for {
        u <- APIUser.find(By(APIUser.name_, username))
-       v <- tryo {KafkaMappedConnector.updateUserAccountViews(u)}
+       v <- tryo {Connector.connector.vend.updateUserAccountViews(u)}
       } yield v
     }
   }

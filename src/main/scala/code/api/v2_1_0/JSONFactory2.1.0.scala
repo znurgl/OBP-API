@@ -35,11 +35,20 @@ import java.util.Date
 
 import code.api.util.ApiRole
 import code.api.v1_2_1.AmountOfMoneyJSON
-import code.api.v1_4_0.JSONFactory1_4_0.{ChallengeJSON, TransactionRequestAccountJSON}
+import code.api.v1_4_0.JSONFactory1_4_0.{ChallengeJSON, CustomerFaceImageJson, TransactionRequestAccountJSON}
 import code.api.v2_0_0.TransactionRequestChargeJSON
-import code.model.{AmountOfMoney, Consumer}
+import code.branches.Branches.BranchId
+import code.common.{License, Meta}
+import code.customer.Customer
+import code.metadata.counterparties.CounterpartyTrait
+import code.model._
 import code.transactionrequests.TransactionRequests._
+import code.model.{AmountOfMoney, Consumer, Iban}
+import code.metadata.counterparties.CounterpartyTrait
+import net.liftweb.common.{Box, Full}
 import net.liftweb.json.JValue
+import code.products.Products.Product
+import code.sandbox._
 
 case class TransactionRequestTypeJSON(transaction_request_type: String)
 case class TransactionRequestTypesJSON(transaction_request_types: List[TransactionRequestTypeJSON])
@@ -58,21 +67,36 @@ case class TransactionRequestDetailsSandBoxTanJSON(
                                       ) extends TransactionRequestDetailsJSON
 
 case class TransactionRequestDetailsSEPAJSON(
-                                                  value : AmountOfMoneyJSON,
-                                                  IBAN: String,
-                                                  description : String
-                                          ) extends TransactionRequestDetailsJSON
+                                              value: AmountOfMoneyJSON,
+                                              iban: String,
+                                              description: String
+                                            ) extends TransactionRequestDetailsJSON
+
+case class TransactionRequestDetailsSEPAResponseJSON(
+                                              iban: String,
+                                              to: TransactionRequestAccountJSON,
+                                              value: AmountOfMoneyJSON,
+                                              description: String
+                                            ) extends TransactionRequestDetailsJSON
 
 case class TransactionRequestDetailsFreeFormJSON(
                                                   value : AmountOfMoneyJSON
                                             ) extends TransactionRequestDetailsJSON
+
+case class TransactionRequestDetailsFreeFormResponseJSON(
+                                                         to: TransactionRequestAccountJSON,
+                                                         value: AmountOfMoneyJSON,
+                                                         description: String
+                                                       ) extends TransactionRequestDetailsJSON
+
+
 
 case class TransactionRequestWithChargeJSON210(
                                              id: String,
                                              `type`: String,
                                              from: TransactionRequestAccountJSON,
                                              details: JValue,
-                                             transaction_ids: String,
+                                             transaction_ids: List[String],
                                              status: String,
                                              start_date: Date,
                                              end_date: Date,
@@ -86,6 +110,151 @@ case class TransactionRequestWithChargeJSONs210(
 case class PutEnabledJSON(enabled: Boolean)
 case class ConsumerJSON(id: Long, name: String, appType: String, description: String, developerEmail: String, enabled: Boolean, created: Date)
 case class ConsumerJSONs(list: List[ConsumerJSON])
+
+case class PostCounterpartyJSON(name: String,
+                                other_bank_id: String,
+                                other_account_id: String,
+                                other_account_provider: String,
+                                account_routing_scheme: String,
+                                account_routing_address: String,
+                                bank_routing_scheme: String,
+                                bank_routing_address: String,
+                                is_beneficiary: Boolean
+                               )
+
+
+case class CounterpartiesJSON(
+                              counterpaties: List[CounterpartyJSON]
+                             )
+
+case class CounterpartyJSON(
+                             counterparty_id: String,
+                             display: CounterpartyNameJSON,
+                             created_by_user_id: String,
+                             this_account: UsedByAccountJSON,
+                             account_routing: AccountRoutingJSON,
+                             bank_routing: BankRoutingJSON,
+                             metadata: CounterpartyMetadataJSON
+                           )
+
+case class CounterpartyMetadataJSON(
+                                     public_alias: String,
+                                     private_alias: String,
+                                     more_info: String,
+                                     URL: String,
+                                     image_URL: String,
+                                     open_corporates_URL: String,
+                                     corporate_location: LocationJSON,
+                                     physical_location: LocationJSON
+                                   )
+
+case class AccountRoutingJSON(
+                               scheme: String,
+                               address: String
+                             )
+
+case class BankRoutingJSON(
+                               scheme: String,
+                               address: String
+                             )
+
+
+case class UsedByAccountJSON(
+                              bank_id: String,
+                              account_id: String
+                            )
+
+
+case class CounterpartyNameJSON(
+                              name: String,
+                              is_alias: Boolean
+                            )
+
+
+case class LocationJSON(
+                         latitude: Double,
+                         longitude: Double,
+                         date: Date,
+                         user: UserJSON
+                       )
+
+case class UserJSON(
+                     id: String,
+                     provider: String,
+                     username: String
+                   )
+
+
+case class PostCustomerJson(
+                             user_id: String,
+                             customer_number : String,
+                             legal_name : String,
+                             mobile_phone_number : String,
+                             email : String,
+                             face_image : CustomerFaceImageJson,
+                             date_of_birth: Date,
+                             relationship_status: String,
+                             dependants: Int,
+                             dob_of_dependants: List[Date],
+                             credit_rating: CustomerCreditRatingJSON,
+                             credit_limit: AmountOfMoneyJSON,
+                             highest_education_attained: String,
+                             employment_status: String,
+                             kyc_status: Boolean,
+                             last_ok_date: Date)
+
+case class CustomerJson(customer_id: String,
+                        customer_number : String,
+                        legal_name : String,
+                        mobile_phone_number : String,
+                        email : String,
+                        face_image : CustomerFaceImageJson,
+                        date_of_birth: Date,
+                        relationship_status: String,
+                        dependants: Int,
+                        dob_of_dependants: List[Date],
+                        credit_rating: Option[CustomerCreditRatingJSON],
+                        credit_limit: Option[AmountOfMoneyJSON],
+                        highest_education_attained: String,
+                        employment_status: String,
+                        kyc_status: Boolean,
+                        last_ok_date: Date)
+case class CustomerJSONs(customers: List[CustomerJson])
+
+case class CustomerCreditRatingJSON(rating: String, source: String)
+
+case class ProductJson(code : String,
+                       name : String,
+                       category: String,
+                       family : String,
+                       super_family : String,
+                       more_info_url: String,
+                       details: String,
+                       description: String,
+                       meta : MetaJson)
+
+case class ProductsJson (products : List[ProductJson])
+case class MetaJson(license : LicenseJson)
+case class LicenseJson(id : String, name : String)
+
+case class BranchJsonPut(
+                       bank_id: String,
+                       name: String,
+                       address: SandboxAddressImport,
+                       location: SandboxLocationImport,
+                       meta: SandboxMetaImport,
+                       lobby: Option[SandboxLobbyImport],
+                       driveUp: Option[SandboxDriveUpImport])
+
+case class BranchJsonPost(
+                           id: String,
+                           bank_id: String,
+                           name: String,
+                           address: SandboxAddressImport,
+                           location: SandboxLocationImport,
+                           meta: SandboxMetaImport,
+                           lobby: Option[SandboxLobbyImport],
+                           driveUp: Option[SandboxDriveUpImport])
 
 object JSONFactory210{
   def createTransactionRequestTypeJSON(transactionRequestType : String ) : TransactionRequestTypeJSON = {
@@ -135,12 +304,36 @@ object JSONFactory210{
   }
 
   def getTransactionRequestDetailsSEPAFromJson(details: TransactionRequestDetailsSEPAJSON) : TransactionRequestDetailsSEPA = {
+    val toAccIban = Iban (
+      iban = details.iban
+    )
     val amount = AmountOfMoney (
       currency = details.value.currency,
       amount = details.value.amount
     )
 
     TransactionRequestDetailsSEPA (
+      iban = details.iban,
+      value = amount,
+      description = details.description
+    )
+  }
+
+  def getTransactionRequestDetailsSEPAResponseJSONFromJson(details: TransactionRequestDetailsSEPAResponseJSON) : TransactionRequestDetailsSEPAResponse = {
+    val toAcc = TransactionRequestAccount (
+      bank_id = details.to.bank_id,
+      account_id = details.to.account_id
+    )
+    val toAccIban = Iban (
+      iban = details.iban
+    )
+    val amount = AmountOfMoney (
+      currency = details.value.currency,
+      amount = details.value.amount
+    )
+    TransactionRequestDetailsSEPAResponse (
+      iban = details.iban,
+      to=toAcc,
       value = amount,
       description = details.description
     )
@@ -157,6 +350,23 @@ object JSONFactory210{
     )
   }
 
+  def getTransactionRequestDetailsFreeFormResponseJson(details: TransactionRequestDetailsFreeFormResponseJSON) : TransactionRequestDetailsFreeFormResponse = {
+    val toAcc = TransactionRequestAccount (
+      bank_id = details.to.bank_id,
+      account_id = details.to.account_id
+    )
+    val amount = AmountOfMoney (
+      currency = details.value.currency,
+      amount = details.value.amount
+    )
+    TransactionRequestDetailsFreeFormResponse (
+      to=toAcc,
+      value = amount,
+      description = details.description
+    )
+  }
+
+
   /** Creates v2.1.0 representation of a TransactionType
     *
     * @param tr An internal TransactionRequest instance
@@ -172,7 +382,7 @@ object JSONFactory210{
         account_id = tr.from.account_id
       ),
       details = tr.details,
-      transaction_ids = tr.transaction_ids,
+      transaction_ids = tr.transaction_ids::Nil,
       status = tr.status,
       start_date = tr.start_date,
       end_date = tr.end_date,
@@ -205,5 +415,147 @@ object JSONFactory210{
   }
   def createConsumerJSONs(l : List[Consumer]): ConsumerJSONs = {
     ConsumerJSONs(l.map(createConsumerJSON))
+  }
+
+  def createCounterpartJSON(moderated: ModeratedOtherBankAccount, metadata : CounterpartyMetadata, couterparty: CounterpartyTrait) : CounterpartyJSON = {
+    new CounterpartyJSON(
+      counterparty_id = metadata.metadataId,
+      display = CounterpartyNameJSON(moderated.label.display, moderated.isAlias),
+      created_by_user_id = couterparty.createdByUserId,
+      this_account = UsedByAccountJSON(couterparty.thisBankId, couterparty.thisAccountId),
+      account_routing = AccountRoutingJSON(couterparty.accountRoutingScheme, couterparty.accountRoutingAddress),
+      bank_routing = BankRoutingJSON(couterparty.bankRoutingScheme, couterparty.bankRoutingAddress),
+      metadata = CounterpartyMetadataJSON(public_alias = metadata.getPublicAlias,
+        private_alias = metadata.getPrivateAlias,
+        more_info = metadata.getMoreInfo,
+        URL = metadata.getUrl,
+        image_URL = metadata.getImageURL,
+        open_corporates_URL = metadata.getOpenCorporatesURL,
+        corporate_location = createLocationJSON(metadata.getCorporateLocation),
+        physical_location = createLocationJSON(metadata.getPhysicalLocation)
+      )
+    )
+  }
+
+  def createCounterpartyMetaDataJSON(metadata : ModeratedOtherBankAccountMetadata) : CounterpartyMetadataJSON = {
+    new CounterpartyMetadataJSON(
+      public_alias = stringOptionOrNull(metadata.publicAlias),
+      private_alias = stringOptionOrNull(metadata.privateAlias),
+      more_info = stringOptionOrNull(metadata.moreInfo),
+      URL = stringOptionOrNull(metadata.url),
+      image_URL = stringOptionOrNull(metadata.imageURL),
+      open_corporates_URL = stringOptionOrNull(metadata.openCorporatesURL),
+      corporate_location = metadata.corporateLocation.map(createLocationJSON).getOrElse(null),
+      physical_location = metadata.physicalLocation.map(createLocationJSON).getOrElse(null)
+    )
+  }
+
+  def createLocationJSON(loc : Option[GeoTag]) : LocationJSON = {
+    loc match {
+      case Some(location) => {
+        val user = createUserJSON(location.postedBy)
+        //test if the GeoTag is set to its default value
+        if(location.latitude == 0.0 & location.longitude == 0.0 & user == null)
+          null
+        else
+          new LocationJSON(
+            latitude = location.latitude,
+            longitude = location.longitude,
+            date = location.datePosted,
+            user = user
+          )
+      }
+      case _ => null
+    }
+  }
+
+  def createUserJSON(user : Box[User]) : UserJSON = {
+    user match {
+      case Full(u) => createUserJSON(u)
+      case _ => null
+    }
+  }
+
+  def createUserJSON(user : User) : UserJSON = {
+    new UserJSON(
+      user.idGivenByProvider,
+      stringOrNull(user.provider),
+      stringOrNull(user.emailAddress) //TODO: shouldn't this be the display name?
+    )
+  }
+
+
+  def stringOrNull(text : String) =
+    if(text == null || text.isEmpty)
+      null
+    else
+      text
+
+  def stringOptionOrNull(text : Option[String]) =
+    text match {
+      case Some(t) => stringOrNull(t)
+      case _ => null
+    }
+
+  def createCustomerJson(cInfo : Customer) : CustomerJson = {
+
+    CustomerJson(
+      customer_id = cInfo.customerId,
+      customer_number = cInfo.number,
+      legal_name = cInfo.legalName,
+      mobile_phone_number = cInfo.mobileNumber,
+      email = cInfo.email,
+      face_image = CustomerFaceImageJson(url = cInfo.faceImage.url,
+        date = cInfo.faceImage.date),
+      date_of_birth = cInfo.dateOfBirth,
+      relationship_status = cInfo.relationshipStatus,
+      dependants = cInfo.dependents,
+      dob_of_dependants = cInfo.dobOfDependents,
+      credit_rating = Option(CustomerCreditRatingJSON(rating = cInfo.creditRating.rating, source = cInfo.creditRating.source)),
+      credit_limit = Option(AmountOfMoneyJSON(currency = cInfo.creditLimit.currency, amount = cInfo.creditLimit.amount)),
+      highest_education_attained = cInfo.highestEducationAttained,
+      employment_status = cInfo.employmentStatus,
+      kyc_status = cInfo.kycStatus,
+      last_ok_date = cInfo.lastOkDate
+    )
+  }
+  def createCustomersJson(customers : List[Customer]) : CustomerJSONs = {
+    CustomerJSONs(customers.map(createCustomerJson))
+  }
+
+  // V210 Products
+  def createProductJson(product: Product) : ProductJson = {
+    ProductJson(product.code.value,
+      product.name,
+      product.category,
+      product.family,
+      product.superFamily,
+      product.moreInfoUrl,
+      product.details,
+      product.description,
+      createMetaJson(product.meta))
+  }
+
+  def createProductsJson(productsList: List[Product]) : ProductsJson = {
+    ProductsJson(productsList.map(createProductJson))
+  }
+  def createMetaJson(meta: Meta) : MetaJson = {
+    MetaJson(createLicenseJson(meta.license))
+  }
+  // Accept a license object and return its json representation
+  def createLicenseJson(license : License) : LicenseJson = {
+    LicenseJson(license.id, license.name)
+  }
+
+  def toBranchJsonPost(branchId: BranchId, branch: BranchJsonPut): Box[BranchJsonPost] = {
+    Full(BranchJsonPost(
+      branchId.value,
+      branch.bank_id,
+      branch.name,
+      branch.address,
+      branch.location,
+      branch.meta,
+      branch.lobby,
+      branch.driveUp))
   }
 }

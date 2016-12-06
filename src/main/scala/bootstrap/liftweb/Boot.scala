@@ -51,7 +51,7 @@ import code.meetings.MappedMeeting
 import code.socialmedia.MappedSocialMedia
 import code.management.{AccountsAPI, ImporterAPI}
 import code.metadata.comments.MappedComment
-import code.metadata.counterparties.{MappedCounterpartyMetadata, MappedCounterpartyWhereTag}
+import code.metadata.counterparties.{MappedCounterpartyMetadata, MappedCounterpartyWhereTag, MappedCounterparty}
 import code.metadata.narrative.MappedNarrative
 import code.metadata.tags.MappedTag
 import code.metadata.transactionimages.MappedTransactionImage
@@ -169,7 +169,7 @@ class Boot extends Loggable{
 
     // ensure our relational database's tables are created/fit the schema
     if(Props.get("connector").getOrElse("") == "mapped" ||
-       Props.get("connector").getOrElse("") == "kafka" )
+       Props.get("connector").getOrElse("").startsWith("kafka") )
       schemifyAll()
 
     // This sets up MongoDB config (for the mongodb connector)
@@ -438,5 +438,6 @@ object ToSchemify {
     MappedKafkaBankAccountData,
     MappedEntitlement,
     MappedPhysicalCard,
-    PinReset)
+    PinReset,
+    MappedCounterparty)
 }

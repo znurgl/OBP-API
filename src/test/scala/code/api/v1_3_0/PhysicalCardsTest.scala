@@ -3,13 +3,17 @@ package code.api.v1_3_0
 import java.util.Date
 
 import code.api.util.APIUtil.OAuth._
+import code.api.v2_1_0.{BranchJsonPost}
 import code.api.{DefaultConnectorTestSetup, DefaultUsers, ServerSetup}
 import code.bankconnectors.{Connector, OBPQueryParam}
+import code.branches.Branches.{Branch, BranchId}
+import code.branches.MappedBranch
 import code.management.ImporterAPI.ImporterTransaction
 import code.model.{PhysicalCard, _}
+import code.model.dataAccess.APIUser
 import code.transactionrequests.TransactionRequests._
-import net.liftweb.common.{Box, Empty, Full, Failure, Loggable}
-
+import net.liftweb.common.{Box, Empty, Failure, Full, Loggable}
+import code.products.Products.{Product, ProductCode}
 class PhysicalCardsTest extends ServerSetup with DefaultUsers  with DefaultConnectorTestSetup {
 
   implicit val dateFormats = net.liftweb.json.DefaultFormats
@@ -56,14 +60,18 @@ class PhysicalCardsTest extends ServerSetup with DefaultUsers  with DefaultConne
 
     type AccountType = BankAccount
 
+  def getUser(name: String, password: String): Box[InboundUser] = ???
+    def updateUserAccountViews(user: APIUser): Unit = ???
+
     //these methods aren't required by our test
     override def getChallengeThreshold(userId: String, accountId: String, transactionRequestType: String, currency: String): (BigDecimal, String) = (0, "EUR")
     override def getBank(bankId : BankId) : Box[Bank] = Full(bank)
     override def getBanks : List[Bank] = Nil
     override def getBankAccount(bankId : BankId, accountId : AccountId) : Box[BankAccount] = Empty
-    override def getCounterparty(bankId: BankId, accountID : AccountId, counterpartyID : String) : Box[Counterparty] =
+    override def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = Empty
+    override def getCounterpartyFromTransaction(bankId: BankId, accountID : AccountId, counterpartyID : String) : Box[Counterparty] =
       Empty
-    override def getCounterparties(bankId: BankId, accountID : AccountId): List[Counterparty] =
+    override def getCounterpartiesFromTransaction(bankId: BankId, accountID : AccountId): List[Counterparty] =
       Nil
     override def getTransactions(bankId: BankId, accountID: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]] =
       Empty
@@ -162,6 +170,12 @@ class PhysicalCardsTest extends ServerSetup with DefaultUsers  with DefaultConne
     override def updateAccountBalance(bankId: BankId, accountId: AccountId, newBalance: BigDecimal): Boolean = ???
     override def setBankAccountLastUpdated(bankNationalIdentifier: String, accountNumber : String, updateDate: Date) : Boolean = ???
     override def updateAccountLabel(bankId: BankId, accountId: AccountId, label: String): Boolean = ???
+
+    override def getProducts(bankId: BankId): Box[List[Product]] = Empty
+    override def getProduct(bankId: BankId, productCode: ProductCode): Box[Product] = Empty
+
+    override def createOrUpdateBranch(branch: BranchJsonPost ): Box[Branch] = Empty
+    override def getBranch(bankId: BankId, branchId: BranchId): Box[MappedBranch]= Empty
   }
 
   override def beforeAll() {

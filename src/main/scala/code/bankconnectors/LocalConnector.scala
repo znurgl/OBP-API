@@ -3,16 +3,20 @@ package code.bankconnectors
 import java.text.SimpleDateFormat
 import java.util.{Date, TimeZone, UUID}
 
+import code.api.v2_1_0.{BranchJsonPost, BranchJsonPut}
+import code.branches.Branches.{Branch, BranchId}
+import code.branches.MappedBranch
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
 import code.metadata.counterparties.{Counterparties, Metadata, MongoCounterparties}
 import code.model._
 import code.model.dataAccess._
+import code.products.Products.ProductCode
 import code.transactionrequests.TransactionRequests._
 import code.util.Helper
 import com.mongodb.QueryBuilder
 import com.tesobe.model.UpdateBankAccount
-import net.liftweb.common._
+import net.liftweb.common.{Box, Empty, Failure, Full, Loggable, _}
 import net.liftweb.json.Extraction
 import net.liftweb.json.JsonAST.JValue
 import net.liftweb.mapper.By
@@ -20,9 +24,12 @@ import net.liftweb.mongodb.BsonDSL._
 import net.liftweb.util.Helpers._
 import net.liftweb.util.Props
 import org.bson.types.ObjectId
-
+import code.products.MappedProduct
+import code.products.Products.{Product, ProductCode}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent._
+import code.products.MappedProduct
+import code.products.Products.{Product, ProductCode}
 
 private object LocalConnector extends Connector with Loggable {
 
@@ -35,6 +42,9 @@ private object LocalConnector extends Connector with Loggable {
     val convertedLimit = fx.convert(limit, rate)
     (convertedLimit, currency)
   }
+
+  def getUser(name: String, password: String): Box[InboundUser] = ???
+  def updateUserAccountViews(user: APIUser): Unit = ???
 
   override def getBank(bankId : BankId): Box[Bank] =
     getHostedBank(bankId)
@@ -51,7 +61,7 @@ private object LocalConnector extends Connector with Loggable {
   }
 
 
-  override def getCounterparty(bankId: BankId, accountId : AccountId, counterpartyID : String): Box[Counterparty] = {
+  override def getCounterpartyFromTransaction(bankId: BankId, accountId : AccountId, counterpartyID : String): Box[Counterparty] = {
 
     /**
      * In this implementation (for legacy reasons), the "otherAccountID" is actually the mongodb id of the
@@ -84,7 +94,7 @@ private object LocalConnector extends Connector with Loggable {
       }
   }
 
-  override def getCounterparties(bankId: BankId, accountId : AccountId): List[Counterparty] = {
+  override def getCounterpartiesFromTransaction(bankId: BankId, accountId : AccountId): List[Counterparty] = {
 
     /**
      * In this implementation (for legacy reasons), the "otherAccountID" is actually the mongodb id of the
@@ -110,6 +120,8 @@ private object LocalConnector extends Connector with Loggable {
       createOtherBankAccount(bankId, accountId, meta, otherAccountFromTransaction)
     })
   }
+
+  def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = Empty
 
   override def getTransactions(bankId: BankId, accountId: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]] = {
     logger.debug("getTransactions for " + bankId + "/" + accountId)
@@ -213,17 +225,24 @@ private object LocalConnector extends Connector with Loggable {
     }
 
     val otherAccount = new Counterparty(
-      id = metadata.metadataId,
+      counterPartyId = metadata.metadataId,
       label = otherAccount_.holder.get,
       nationalIdentifier = otherAccount_.bank.get.national_identifier.get,
-      swift_bic = None, //TODO: need to add this to the json/model
-      iban = Some(otherAccount_.bank.get.IBAN.get),
-      number = otherAccount_.number.get,
-      bankName = otherAccount_.bank.get.name.get,
+      bankRoutingAddress = None, //TODO: need to add this to the json/model
+      accountRoutingAddress = Some(otherAccount_.bank.get.IBAN.get),
+      otherBankId = otherAccount_.number.get,
+      thisBankId = otherAccount_.bank.get.name.get,
       kind = otherAccount_.kind.get,
-      originalPartyBankId = theAccount.bankId,
-      originalPartyAccountId = theAccount.accountId,
-      alreadyFoundMetadata = Some(metadata)
+      thisAccountId = theAccount.bankId,
+      otherAccountId = theAccount.accountId,
+      alreadyFoundMetadata = Some(metadata),
+
+      //TODO V210 following five fields are new, need to be fiexed
+      name = "",
+      bankRoutingScheme = "",
+      accountRoutingScheme="",
+      otherAccountProvider = "",
+      isBeneficiary = true
     )
     val transactionType = transaction.details.get.kind.get
     val amount = transaction.details.get.value.get.amount.get
@@ -363,17 +382,24 @@ private object LocalConnector extends Connector with Loggable {
   private def createOtherBankAccount(originalPartyBankId: BankId, originalPartyAccountId: AccountId,
     otherAccount : CounterpartyMetadata, otherAccountFromTransaction : OBPAccount) : Counterparty = {
     new Counterparty(
-      id = otherAccount.metadataId,
+      counterPartyId = otherAccount.metadataId,
       label = otherAccount.getHolder,
       nationalIdentifier = otherAccountFromTransaction.bank.get.national_identifier.get,
-      swift_bic = None, //TODO: need to add this to the json/model
-      iban = Some(otherAccountFromTransaction.bank.get.IBAN.get),
-      number = otherAccountFromTransaction.number.get,
-      bankName = otherAccountFromTransaction.bank.get.name.get,
+      bankRoutingAddress = None, //TODO: need to add this to the json/model
+      accountRoutingAddress = Some(otherAccountFromTransaction.bank.get.IBAN.get),
+      otherBankId = otherAccountFromTransaction.number.get,
+      thisBankId = otherAccountFromTransaction.bank.get.name.get,
       kind = "",
-      originalPartyBankId = originalPartyBankId,
-      originalPartyAccountId = originalPartyAccountId,
-      alreadyFoundMetadata = Some(otherAccount)
+      thisAccountId = originalPartyBankId,
+      otherAccountId = originalPartyAccountId,
+      alreadyFoundMetadata = Some(otherAccount),
+
+      //TODO V210 following five fields are new, need to be fiexed
+      name = "",
+      bankRoutingScheme = "",
+      accountRoutingScheme="",
+      otherAccountProvider = "",
+      isBeneficiary = true
     )
   }
 
@@ -582,4 +608,12 @@ private object LocalConnector extends Connector with Loggable {
         false
     }
   }
+
+  override def getProducts(bankId: BankId): Box[List[Product]] = Empty
+
+  override def getProduct(bankId: BankId, productCode: ProductCode): Box[Product] = Empty
+
+  override def createOrUpdateBranch(branch: BranchJsonPost ): Box[Branch] = Empty
+
+  override def getBranch(bankId : BankId, branchId: BranchId) : Box[MappedBranch]= Empty
 }

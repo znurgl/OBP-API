@@ -4,6 +4,9 @@ import java.text.SimpleDateFormat
 import java.util.{Date, Locale, UUID}
 
 import code.api.util.ErrorMessages
+import code.api.v2_1_0.{BranchJsonPost, BranchJsonPut}
+import code.branches.Branches.{Branch, BranchId}
+import code.branches.MappedBranch
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
 import code.metadata.comments.MappedComment
@@ -14,18 +17,24 @@ import code.metadata.transactionimages.MappedTransactionImage
 import code.metadata.wheretags.MappedWhereTag
 import code.model._
 import code.model.dataAccess._
+import code.products.Products.ProductCode
 import code.sandbox.{CreateViewImpls, Saveable}
+import code.sandbox.{CreateViewImpls, SandboxBranchImport, Saveable}
 import code.transaction.MappedTransaction
 import code.transactionrequests.MappedTransactionRequest
 import code.transactionrequests.TransactionRequests._
 import code.util.{Helper, TTLCache}
 import code.views.Views
-import net.liftweb.common._
 import net.liftweb.json
 import net.liftweb.mapper._
 import net.liftweb.util.Helpers._
 import net.liftweb.util.Props
 import net.liftweb.json._
+import net.liftweb.common.{Box, Empty, Failure, Full, Loggable}
+import code.products.MappedProduct
+import code.products.Products.{Product, ProductCode}
+import code.products.MappedProduct
+import code.products.Products.{Product, ProductCode}
 
 object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable {
 
@@ -46,7 +55,7 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
   implicit val formats = net.liftweb.json.DefaultFormats
 
 
-  def getUser( username: String, password: String ): Box[KafkaInboundUser] = {
+  def getUser( username: String, password: String ): Box[InboundUser] = {
     for {
       argList <- tryo {Map[String, String]( "username" -> username, "password" -> password )}
       // Generate random uuid to be used as request-response match id
@@ -54,7 +63,7 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
       u <- tryo{cachedUser.getOrElseUpdate( argList.toString, () => process(reqId, "getUser", argList).extract[KafkaInboundValidatedUser])}
       recUsername <- tryo{u.display_name}
     } yield {
-      if (username == u.display_name) new KafkaInboundUser( recUsername, password, recUsername)
+      if (username == u.display_name) new InboundUser( recUsername, password, recUsername)
       else null
     }
   }
@@ -362,12 +371,12 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
     Full(new KafkaBankAccount(r))
   }
 
-  def getCounterparty(thisAccountBankId : BankId, thisAccountId : AccountId, metadata : CounterpartyMetadata) : Box[Counterparty] = {
+  def getCounterpartyFromTransaction(thisAccountBankId : BankId, thisAccountId : AccountId, metadata : CounterpartyMetadata) : Box[Counterparty] = {
     //because we don't have a db backed model for OtherBankAccounts, we need to construct it from an
     //OtherBankAccountMetadata and a transaction
     val t = getTransactions(thisAccountBankId, thisAccountId).map { t =>
       t.filter { e =>
-        if (e.otherAccount.number == metadata.getAccountNumber)
+        if (e.otherAccount.otherBankId == metadata.getAccountNumber)
           true
         else
           false
@@ -376,17 +385,24 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
 
     val res = new Counterparty(
       //counterparty id is defined to be the id of its metadata as we don't actually have an id for the counterparty itself
-      id = metadata.metadataId,
+      counterPartyId = metadata.metadataId,
       label = metadata.getHolder,
       nationalIdentifier = t.otherAccount.nationalIdentifier,
-      swift_bic = None,
-      iban = t.otherAccount.iban,
-      number = metadata.getAccountNumber,
-      bankName = t.otherAccount.bankName,
+      bankRoutingAddress = None,
+      accountRoutingAddress = t.otherAccount.accountRoutingAddress,
+      otherBankId = metadata.getAccountNumber,
+      thisBankId = t.otherAccount.thisBankId,
       kind = t.otherAccount.kind,
-      originalPartyBankId = thisAccountBankId,
-      originalPartyAccountId = thisAccountId,
-      alreadyFoundMetadata = Some(metadata)
+      thisAccountId = thisAccountBankId,
+      otherAccountId = thisAccountId,
+      alreadyFoundMetadata = Some(metadata),
+
+      //TODO V210 following five fields are new, need to be fiexed
+      name = "",
+      bankRoutingScheme = "",
+      accountRoutingScheme="",
+      otherAccountProvider = "",
+      isBeneficiary = true
     )
     Full(res)
   }
@@ -431,13 +447,15 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
 
 
   // Get all counterparties related to an account
-  override def getCounterparties(bankId: BankId, accountID: AccountId): List[Counterparty] =
-    Counterparties.counterparties.vend.getMetadatas(bankId, accountID).flatMap(getCounterparty(bankId, accountID, _))
+  override def getCounterpartiesFromTransaction(bankId: BankId, accountID: AccountId): List[Counterparty] =
+    Counterparties.counterparties.vend.getMetadatas(bankId, accountID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
 
   // Get one counterparty related to a bank account
-  override def getCounterparty(bankId: BankId, accountID: AccountId, counterpartyID: String): Box[Counterparty] =
+  override def getCounterpartyFromTransaction(bankId: BankId, accountID: AccountId, counterpartyID: String): Box[Counterparty] =
     // Get the metadata and pass it to getOtherBankAccount to construct the other account.
-    Counterparties.counterparties.vend.getMetadata(bankId, accountID, counterpartyID).flatMap(getCounterparty(bankId, accountID, _))
+    Counterparties.counterparties.vend.getMetadata(bankId, accountID, counterpartyID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
+
+  def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = Empty
 
   override def getPhysicalCards(user: User): List[PhysicalCard] =
     List()
@@ -983,19 +1001,36 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
   // Helper for creating other bank account
   def createCounterparty(c: KafkaInboundTransactionCounterparty, o: KafkaBankAccount, alreadyFoundMetadata : Option[CounterpartyMetadata]) = {
     new Counterparty(
-      id = alreadyFoundMetadata.map(_.metadataId).getOrElse(""),
+      counterPartyId = alreadyFoundMetadata.map(_.metadataId).getOrElse(""),
       label = c.account_number.getOrElse(c.name.getOrElse("")),
       nationalIdentifier = "",
-      swift_bic = None,
-      iban = None,
-      number = c.account_number.getOrElse(""),
-      bankName = "",
+      bankRoutingAddress = None,
+      accountRoutingAddress = None,
+      otherBankId = c.account_number.getOrElse(""),
+      thisBankId = "",
       kind = "",
-      originalPartyBankId = BankId(o.bankId.value),
-      originalPartyAccountId = AccountId(o.accountId.value),
-      alreadyFoundMetadata = alreadyFoundMetadata
+      thisAccountId = BankId(o.bankId.value),
+      otherAccountId = AccountId(o.accountId.value),
+      alreadyFoundMetadata = alreadyFoundMetadata,
+
+      //TODO V210 following five fields are new, need to be fiexed
+      name = "",
+      bankRoutingScheme = "",
+      accountRoutingScheme="",
+      otherAccountProvider = "",
+      isBeneficiary = true
+
+
     )
   }
+
+  override def getProducts(bankId: BankId): Box[List[Product]] = Empty
+
+  override def getProduct(bankId: BankId, productCode: ProductCode): Box[Product] = Empty
+
+  override  def createOrUpdateBranch(branch: BranchJsonPost ): Box[Branch] = Empty
+
+  override def getBranch(bankId : BankId, branchId: BranchId) : Box[MappedBranch]= Empty
 
   case class KafkaBankAccount(r: KafkaInboundAccount) extends BankAccount {
     def accountId : AccountId       = AccountId(r.id)
@@ -1087,11 +1122,6 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
                                   latitude : Double,
                                   longitude : Double)
 
-  case class KafkaInboundUser(
-                              email : String,
-                              password : String,
-                              display_name : String)
-
   case class KafkaInboundValidatedUser(
                                        email : String,
                                        display_name : String)
@@ -1160,14 +1190,14 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
 
   case class KafkaInboundAccountData(
                                       banks : List[KafkaInboundBank],
-                                      users : List[KafkaInboundUser],
+                                      users : List[InboundUser],
                                       accounts : List[KafkaInboundAccount]
                                    )
 
   // We won't need this. TODO clean up.
   case class KafkaInboundData(
                                banks : List[KafkaInboundBank],
-                               users : List[KafkaInboundUser],
+                               users : List[InboundUser],
                                accounts : List[KafkaInboundAccount],
                                transactions : List[KafkaInboundTransaction],
                                branches: List[KafkaInboundBranch],
@@ -1208,5 +1238,7 @@ object KafkaMappedConnector extends Connector with CreateViewImpls with Loggable
                                        limit: BigDecimal,
                                        currency: String
                                         )
+
+
 }
 

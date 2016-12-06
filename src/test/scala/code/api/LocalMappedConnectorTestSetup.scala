@@ -1,6 +1,6 @@
 package code.api
 
-import java.util.Date
+import java.util.{Date, UUID}
 
 import bootstrap.liftweb.ToSchemify
 import code.model._
@@ -9,6 +9,7 @@ import net.liftweb.common.Box
 import net.liftweb.mapper.MetaMapper
 import net.liftweb.util.Helpers._
 import code.entitlement.{Entitlement, MappedEntitlement}
+import code.metadata.counterparties.{CounterpartyTrait, MappedCounterparty, MappedCounterpartyMetadata}
 import code.transaction.MappedTransaction
 
 import scala.util.Random
@@ -24,6 +25,17 @@ trait LocalMappedConnectorTestSetup extends TestConnectorSetupWithStandardPermis
           .shortBankName(randomString(5))
           .permalink(id)
           .national_identifier(randomString(5)).saveMe
+  }
+
+  override protected def createCounterparty(bankId:String, accountId:String, accountRoutingAddress:String, isBeneficiary:Boolean):CounterpartyTrait = {
+    MappedCounterparty.create.
+      mCounterPartyId(UUID.randomUUID().toString).
+      mName(UUID.randomUUID().toString).
+      mAccountRoutingAddress(accountRoutingAddress).
+      mOtherBankId(bankId).
+      mOtherAccountId(accountId).
+      mIsBeneficiary(isBeneficiary).
+    saveMe
   }
 
 // TODO: Should return an option or box so can test if the insert succeeded

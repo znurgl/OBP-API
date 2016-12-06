@@ -79,6 +79,7 @@ object ErrorMessages {
 
   val InvalidConsumerKey = "OBP-20008: Invalid Consumer Key."
   val InvalidConsumerCredentials = "OBP-20009: Invalid consumer credentials"
+  val InsufficientAuthorisationToCreateBranch  = "OBP-20010: Insufficient authorisation to Create Branch offered by the bank. The Request could not be created because you don't have access to CanCreateBranch."
 
   // Resource related messages
   val BankNotFound = "OBP-30001: Bank not found. Please specify a valid value for BANK_ID."
@@ -93,6 +94,14 @@ object ErrorMessages {
   val CustomerNumberAlreadyExists = "OBP-30006: Customer Number already exists. Please specify a different value for BANK_ID or CUSTOMER_NUMBER."
   val CustomerAlreadyExistsForUser = "OBP-30007: The User is already linked to a Customer at the bank specified by BANK_ID"
   val CustomerDoNotExistsForUser = "OBP-30008: User is not linked to a Customer at the bank specified by BANK_ID"
+  val AtmNotFoundByAtmId = "OBP-30009: ATM not found. Please specify a valid value for ATM_ID."
+  val BranchNotFoundByBranchId = "OBP-300010: Branch not found. Please specify a valid value for BRANCH_ID."
+  val ProductNotFoundByProductCode = "OBP-30011: Product not found. Please specify a valid value for PRODUCT_CODE."
+  val CounterpartyNotFoundByIban = "OBP-30012: Counterparty not found. The IBAN specified does not exist on this server."
+  val CounterpartyBeneficiaryPermit = "OBP-30013: The account can not send money to the Counterparty.Please set the Counterparty 'isBeneficiary' true first"
+  val CounterpartyAlreadyExists = "OBP-30014: Counterparty already exists. Please specify a different value for BANK_ID or ACCOUNT_ID or VIEW_ID or NAME."
+  val CreateBranchInsertError = "OBP-30015: Could not insert the Branch"
+  val CreateBranchUpdateError = "OBP-30016: Could not update the Branch"
 
   val MeetingsNotSupported = "OBP-30101: Meetings are not supported on this server."
   val MeetingApiKeyNotConfigured = "OBP-30102: Meeting provider API Key is not configured."
@@ -426,6 +435,14 @@ object APIUtil extends Loggable {
   val apiTagExperimental = ResourceDocTag("Experimental")
   val apiTagPerson = ResourceDocTag("Person")
 
+  case class Catalogs(core : Boolean =false, psd2 : Boolean=false, obwg:Boolean=false)
+
+  val Core = true
+  val PSD2 = true
+  val OBWG = true
+  val notCore = false
+  val notPSD2 = false
+  val notOBWG = false
 
   // Used to document the API calls
   case class ResourceDoc(
@@ -439,9 +456,7 @@ object APIUtil extends Loggable {
     exampleRequestBody: JValue, // An example of the body required (maybe empty)
     successResponseBody: JValue, // A successful response body
     errorResponseBodies: List[JValue], // Possible error responses
-    isCore: Boolean,
-    isPSD2: Boolean,
-    isOBWG: Boolean,
+    catalogs: Catalogs,
     tags: List[ResourceDocTag]
   )
 

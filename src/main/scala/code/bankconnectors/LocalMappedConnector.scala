@@ -2,6 +2,11 @@ package code.bankconnectors
 
 import java.util.{Date, UUID}
 
+import code.TransactionTypes.TransactionType.TransactionTypeProvider
+import code.api.util.ErrorMessages
+import code.api.v2_1_0.{BranchJsonPost, BranchJsonPut}
+import code.branches.Branches.{Branch, BranchId}
+import code.branches.MappedBranch
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
 import code.metadata.comments.MappedComment
@@ -12,13 +17,16 @@ import code.metadata.transactionimages.MappedTransactionImage
 import code.metadata.wheretags.MappedWhereTag
 import code.model._
 import code.model.dataAccess._
+import code.products.MappedProduct
+import code.products.Products.{Product, ProductCode}
+import code.sandbox.SandboxBranchImport
 import code.transaction.MappedTransaction
 import code.transactionrequests.MappedTransactionRequest
 import code.transactionrequests.TransactionRequests._
 import code.util.Helper
 import com.tesobe.model.UpdateBankAccount
-import net.liftweb.common.{Box, Failure, Full, Loggable}
-import net.liftweb.mapper._
+import net.liftweb.common._
+import net.liftweb.mapper.{By, _}
 import net.liftweb.util.Helpers._
 import net.liftweb.util.Props
 
@@ -34,7 +42,7 @@ object LocalMappedConnector extends Connector with Loggable {
     val propertyName = "transactionRequests_challenge_threshold_" + transactionRequestType.toUpperCase
     val threshold = BigDecimal(Props.get(propertyName, "1000"))
     logger.info(s"threshold is $threshold")
-    
+
     // TODO constrain this to supported currencies.
     val thresholdCurrency = Props.get("transactionRequests_challenge_currency", "EUR")
     logger.info(s"thresholdCurrency is $thresholdCurrency")
@@ -44,6 +52,9 @@ object LocalMappedConnector extends Connector with Loggable {
     logger.info(s"getChallengeThreshold for currency $currency is $convertedThreshold")
     (convertedThreshold, currency)
   }
+
+  def getUser(name: String, password: String): Box[InboundUser] = ???
+  def updateUserAccountViews(user: APIUser): Unit = ???
 
   //gets a particular bank handled by this connector
   override def getBank(bankId: BankId): Box[Bank] =
@@ -134,7 +145,7 @@ object LocalMappedConnector extends Connector with Loggable {
       By(MappedAccountHolder.accountPermalink, accountID.value)).map(accHolder => accHolder.user.obj).flatten.toSet
 
 
-  def getCounterparty(thisAccountBankId : BankId, thisAccountId : AccountId, metadata : CounterpartyMetadata) : Box[Counterparty] = {
+  def getCounterpartyFromTransaction(thisAccountBankId: BankId, thisAccountId: AccountId, metadata: CounterpartyMetadata): Box[Counterparty] = {
     //because we don't have a db backed model for OtherBankAccounts, we need to construct it from an
     //OtherBankAccountMetadata and a transaction
     for { //find a transaction with this counterparty
@@ -146,29 +157,66 @@ object LocalMappedConnector extends Connector with Loggable {
     } yield {
       new Counterparty(
         //counterparty id is defined to be the id of its metadata as we don't actually have an id for the counterparty itself
-        id = metadata.metadataId,
+        counterPartyId = metadata.metadataId,
         label = metadata.getHolder,
         nationalIdentifier = t.counterpartyNationalId.get,
-        swift_bic = None,
-        iban = t.getCounterpartyIban(),
-        number = metadata.getAccountNumber,
-        bankName = t.counterpartyBankName.get,
+        bankRoutingAddress = None,
+        accountRoutingAddress = t.getCounterpartyIban(),
+        otherBankId = metadata.getAccountNumber,
+        thisBankId = t.counterpartyBankName.get,
         kind = t.counterpartyAccountKind.get,
-        originalPartyBankId = thisAccountBankId,
-        originalPartyAccountId = thisAccountId,
-        alreadyFoundMetadata = Some(metadata)
+        thisAccountId = thisAccountBankId,
+        otherAccountId = thisAccountId,
+        alreadyFoundMetadata = Some(metadata),
+
+        //TODO V210 following five fields are new, need to be fiexed
+        name = "",
+        bankRoutingScheme = "",
+        accountRoutingScheme="",
+        otherAccountProvider = "",
+        isBeneficiary = true
       )
     }
   }
 
   // Get all counterparties related to an account
-  override def getCounterparties(bankId: BankId, accountID: AccountId): List[Counterparty] =
-    Counterparties.counterparties.vend.getMetadatas(bankId, accountID).flatMap(getCounterparty(bankId, accountID, _))
+  override def getCounterpartiesFromTransaction(bankId: BankId, accountID: AccountId): List[Counterparty] =
+  Counterparties.counterparties.vend.getMetadatas(bankId, accountID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
 
   // Get one counterparty related to a bank account
-  override def getCounterparty(bankId: BankId, accountID: AccountId, counterpartyID: String): Box[Counterparty] =
-    // Get the metadata and pass it to getOtherBankAccount to construct the other account.
-    Counterparties.counterparties.vend.getMetadata(bankId, accountID, counterpartyID).flatMap(getCounterparty(bankId, accountID, _))
+  override def getCounterpartyFromTransaction(bankId: BankId, accountID: AccountId, counterpartyID: String): Box[Counterparty] =
+  // Get the metadata and pass it to getOtherBankAccount to construct the other account.
+  Counterparties.counterparties.vend.getMetadata(bankId, accountID, counterpartyID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
+
+
+  def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = {
+    for {
+      t <- Counterparties.counterparties.vend.getMetadata(thisAccountBankId, thisAccountId, couterpartyId)
+    } yield {
+      new Counterparty(
+        //counterparty id is defined to be the id of its metadata as we don't actually have an id for the counterparty itself
+        counterPartyId = t.metadataId,
+        label = t.getHolder,
+        nationalIdentifier = "",
+        bankRoutingAddress = None,
+        accountRoutingAddress = None,
+        otherBankId = t.getAccountNumber,
+        thisBankId = "",
+        kind = "",
+        thisAccountId = thisAccountBankId,
+        otherAccountId = thisAccountId,
+        alreadyFoundMetadata = Some(t),
+
+        //TODO V210 following five fields are new, need to be fiexed
+        name = "",
+        bankRoutingScheme = "",
+        accountRoutingScheme="",
+        otherAccountProvider = "",
+        isBeneficiary = true
+      )
+    }
+  }
+
 
   override def getPhysicalCards(user: User): List[PhysicalCard] = {
     val list = code.cards.PhysicalCard.physicalCardProvider.vend.getPhysicalCards(user)
@@ -735,6 +783,78 @@ Store one or more transactions
       }
 
     result.getOrElse(false)
+  }
+
+  override def getProducts(bankId: BankId): Box[List[Product]] = {
+    Full(MappedProduct.findAll(By(MappedProduct.mBankId, bankId.value)))
+  }
+
+  override def getProduct(bankId: BankId, productCode: ProductCode): Box[Product] = {
+    MappedProduct.find(
+      By(MappedProduct.mBankId, bankId.value),
+      By(MappedProduct.mCode, productCode.value)
+    )
+  }
+
+  override def createOrUpdateBranch(branch: BranchJsonPost): Box[Branch] = {
+
+    val lobbyHours =  if (branch.lobby.isDefined) {branch.lobby.get.hours.toString} else ""
+    val driveUpHours =  if (branch.driveUp.isDefined) {branch.driveUp.get.hours.toString} else ""
+
+    //check the branch existence and update or insert data
+    getBranch(BankId(branch.bank_id), BranchId(branch.id)) match {
+      case Full(mappedBranch) =>
+        tryo {
+          mappedBranch
+            .mBranchId(branch.id)
+            .mBankId(branch.bank_id)
+            .mName(branch.name)
+            .mLine1(branch.address.line_1)
+            .mLine2(branch.address.line_2)
+            .mLine3(branch.address.line_3)
+            .mCity(branch.address.city)
+            .mCounty(branch.address.county)
+            .mState(branch.address.state)
+            .mPostCode(branch.address.post_code)
+            .mCountryCode(branch.address.country_code)
+            .mlocationLatitude(branch.location.latitude)
+            .mlocationLongitude(branch.location.longitude)
+            .mLicenseId(branch.meta.license.id)
+            .mLicenseName(branch.meta.license.name)
+            .mLobbyHours(lobbyHours)
+            .mDriveUpHours(driveUpHours)
+            .saveMe()
+        } ?~! ErrorMessages.CreateBranchUpdateError
+      case _ =>
+        tryo {
+          MappedBranch.create
+            .mBranchId(branch.id)
+            .mBankId(branch.bank_id)
+            .mName(branch.name)
+            .mLine1(branch.address.line_1)
+            .mLine2(branch.address.line_2)
+            .mLine3(branch.address.line_3)
+            .mCity(branch.address.city)
+            .mCounty(branch.address.county)
+            .mState(branch.address.state)
+            .mPostCode(branch.address.post_code)
+            .mCountryCode(branch.address.country_code)
+            .mlocationLatitude(branch.location.latitude)
+            .mlocationLongitude(branch.location.longitude)
+            .mLicenseId(branch.meta.license.id)
+            .mLicenseName(branch.meta.license.name)
+            .mLobbyHours(lobbyHours)
+            .mDriveUpHours(driveUpHours)
+            .saveMe()
+        } ?~! ErrorMessages.CreateBranchInsertError
+    }
+  }
+
+  override def getBranch(bankId : BankId, branchId: BranchId) : Box[MappedBranch]= {
+    MappedBranch.find(
+      By(MappedBranch.mBankId, bankId.value),
+      By(MappedBranch.mBranchId, branchId.value)
+    )
   }
 
 }

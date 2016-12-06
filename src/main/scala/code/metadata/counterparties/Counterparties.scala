@@ -20,4 +20,48 @@ trait Counterparties {
   def getMetadatas(originalPartyBankId: BankId, originalPartyAccountId : AccountId) : List[CounterpartyMetadata]
 
   def getMetadata(originalPartyBankId: BankId, originalPartyAccountId : AccountId, counterpartyMetadataId : String) : Box[CounterpartyMetadata]
+
+  def getCounterparty(counterPartyId : String): Box[CounterpartyTrait]
+
+  def getCounterpartyByIban(iban : String): Box[CounterpartyTrait]
+
+  def createCounterparty(
+                          createdByUserId: String,
+                          thisBankId: String,
+                          thisAccountId: String,
+                          thisViewId: String,
+                          name: String,
+                          otherBankId: String,
+                          otherAccountId: String,
+                          accountRoutingScheme: String,
+                          accountRoutingAddress: String,
+                          bankRoutingScheme: String,
+                          bankRoutingAddress: String,
+                          isBeneficiary:Boolean
+                        ): Box[CounterpartyTrait]
+
+  def checkCounterpartyAvailable(
+                                  name: String,
+                                  thisBankId: String,
+                                  thisAccountId: String,
+                                  thisViewId: String
+                                ): Boolean
+}
+
+trait CounterpartyTrait {
+  def createdByUserId: String
+  def name: String
+  def thisBankId: String
+  def thisAccountId: String
+  def thisViewId: String
+  def otherBankId: String
+  def otherAccountId: String
+  def otherAccountProvider: String
+  def counterPartyId: String
+  def accountRoutingScheme: String
+  def accountRoutingAddress: String
+  def bankRoutingScheme: String
+  def bankRoutingAddress: String
+  def isBeneficiary : Boolean
+
 }

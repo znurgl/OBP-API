@@ -2,7 +2,8 @@ package code.api
 
 import java.util.{Calendar, Date}
 
-import code.bankconnectors.{OBPLimit, OBPOffset, Connector}
+import code.bankconnectors.{Connector, OBPLimit, OBPOffset}
+import code.metadata.counterparties.{CounterpartyTrait, MappedCounterparty}
 import code.model._
 import net.liftweb.util.Helpers._
 
@@ -13,6 +14,7 @@ trait TestConnectorSetup {
   protected def createAccount(bankId: BankId, accountId : AccountId, currency : String) : BankAccount
   protected def createTransaction(account : BankAccount, startDate : Date, finishDate : Date)
 
+  protected def createCounterparty(bankId:String, accountId:String, iban:String, isBeneficiary:Boolean):CounterpartyTrait
 
   final protected def createAccountAndOwnerView(accountOwner: Option[User], bankId: BankId, accountId : AccountId, currency : String) : BankAccount = {
     val account = createAccount(bankId, accountId, currency)
