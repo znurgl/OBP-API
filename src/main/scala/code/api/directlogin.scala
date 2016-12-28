@@ -183,6 +183,25 @@ object DirectLogin extends RestHelper with Loggable {
       }
     }
 
+    /**Validate user supplied Direct Login parameters before they are used further,
+      * guard maximum length and content of strings (a-z,0-9 etc.) */
+    def validDirectLoginParameters(parameters: Map[String, String]): Iterable[String] = {
+      for( key <- parameters.keys )yield {
+        val parameterValue = parameters.get(key).get
+        key match {
+          case "username" =>
+            assertMediumString(parameterValue)
+          case "password" =>
+            assertMediumAlphaNumeric(parameterValue)
+          case "consumer_key" =>
+            assertMediumAlphaNumeric(parameterValue)
+          case "token" =>
+            assertMediumString(parameterValue)
+          case _ =>ErrorMessages.InvalidDirectLoginParameters
+        }
+      }
+    }
+
     //@return the missing parameters depending of the request type
     def missingDirectLoginParameters(parameters: Map[String, String], requestType: String): Set[String] = {
       requestType match {
@@ -202,8 +221,15 @@ object DirectLogin extends RestHelper with Loggable {
 
     //are all the necessary directLogin parameters present?
     val missingParams = missingDirectLoginParameters(parameters, requestType)
+    //guard maximum length and content of strings (a-z,0-9 etc.) for parameters
+    val validParams = validDirectLoginParameters(parameters)
+
     if (missingParams.nonEmpty) {
       message = ErrorMessages.DirectLoginMissingParameters + missingParams.mkString(", ")
+      httpCode = 400
+    }
+    else if("Success" != validParams.mkString("")){
+      message = validParams.mkString("")
       httpCode = 400
     }
     else if (
@@ -269,16 +295,19 @@ object DirectLogin extends RestHelper with Loggable {
     }
     val (httpCode, message, directLoginParameters) = validator("protectedResource", httpMethod)
 
-    val user = for {
-      u <- getUserFromToken(if (directLoginParameters.isDefinedAt("token")) directLoginParameters.get("token") else Empty)
-    } yield u
-
-    if (user.isEmpty )
+    if (httpCode == 400 || httpCode == 401)
       ParamFailure(message, Empty, Empty, APIFailure(message, httpCode))
-    else
-      user
-  }
+    else {
+      val user = for {
+        u <- getUserFromToken(if (directLoginParameters.isDefinedAt("token")) directLoginParameters.get("token") else Empty)
+      } yield u
 
+      if (user.isEmpty)
+        ParamFailure(message, Empty, Empty, APIFailure(message, httpCode))
+      else
+        user
+    }
+  }
 
   private def getUserId(directLoginParameters: Map[String, String]): Box[Long] = {
     val username = directLoginParameters.getOrElse("username", "")

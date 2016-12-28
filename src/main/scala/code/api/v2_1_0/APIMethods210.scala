@@ -9,35 +9,31 @@ import code.api.util.{APIUtil, ApiRole, ErrorMessages}
 import code.api.v1_2_1.AmountOfMoneyJSON
 import code.api.v1_3_0.{JSONFactory1_3_0, _}
 import code.api.v1_4_0.JSONFactory1_4_0
-import code.api.v1_4_0.JSONFactory1_4_0.{ChallengeAnswerJSON, CustomerFaceImageJson, TransactionRequestAccountJSON}
-import code.sandbox._
-import code.api.v2_0_0._
+import code.api.v1_4_0.JSONFactory1_4_0._
+import code.api.v2_0_0.{TransactionRequestBodyJSON,_}
 import code.api.v2_1_0.JSONFactory210._
 import code.atms.Atms
 import code.atms.Atms.AtmId
-import code.bankconnectors.{Connector}
+import code.bankconnectors.Connector
 import code.branches.Branches
 import code.branches.Branches.BranchId
 import code.customer.{Customer, MockCreditLimit, MockCreditRating, MockCustomerFaceImage}
 import code.entitlement.Entitlement
 import code.fx.fx
-import code.metadata.counterparties.{Counterparties, MappedCounterparty, MappedCounterpartyMetadata}
+import code.metadata.counterparties.{Counterparties}
 import code.model.dataAccess.OBPUser
 import code.model.{BankId, ViewId, _}
-import code.products.Products
 import code.products.Products.ProductCode
 import code.usercustomerlinks.UserCustomerLink
 import net.liftweb.http.Req
 import net.liftweb.json.Extraction
 import net.liftweb.json.JsonAST.JValue
-import net.liftweb.json.Serialization._
 import net.liftweb.mapper.By
 import net.liftweb.util.Helpers._
 import net.liftweb.util.Props
 
 import scala.collection.immutable.Nil
 import scala.collection.mutable.ArrayBuffer
-
 // Makes JValue assignment to Nil work
 import code.util.Helper._
 import net.liftweb.json.JsonDSL._
@@ -243,10 +239,21 @@ trait APIMethods210 {
           if (Props.getBool("transactionRequests_enabled", false)) {
             for {
             /* TODO:
+             * this function is so complicated and duplicate code on case classes: TransactionRequestDetailsSandBoxTan,TransactionRequestDetailsSandBoxTanJSON,TransactionRequestDetailsSandBoxTanResponse different classes in defferent places
              * check if user has access using the view that is given (now it checks if user has access to owner view), will need some new permissions for transaction requests
              * test: functionality, error messages if user not given or invalid, if any other value is not existing
             */
               u <- user ?~ ErrorMessages.UserNotLoggedIn
+              isValidAccountIdFormat <- tryo(assert(isValidID(accountId.value)))?~! ErrorMessages.InvalidAccountIdFormat
+              isValidBankIdFormat <- tryo(assert(isValidID(bankId.value)))?~! ErrorMessages.InvalidBankIdFormat
+
+              fromBank <- Bank(bankId) ?~! {ErrorMessages.BankNotFound}
+              fromAccount <- BankAccount(bankId, accountId) ?~! {ErrorMessages.AccountNotFound}
+              isOwnerOrHasEntitlement <- booleanToBox(u.ownerAccess(fromAccount) == true || hasEntitlement(fromAccount.bankId.value, u.userId, CanCreateAnyTransactionRequest) == true , ErrorMessages.InsufficientAuthorisationToCreateTransactionRequest)
+
+              availableViews <- Full(fromAccount.permittedViews(user))
+              view <- View.fromUrl(viewId, fromAccount) ?~! {ErrorMessages.ViewNotFound}
+              canUserAccessView <- tryo(availableViews.find(_ == viewId)) ?~ {"Current user does not have access to the view " + viewId}
 
               // Get Transaction Request Types from Props "transactionRequests_supported_types". Default is empty string
               validTransactionRequestTypes <- tryo{Props.get("transactionRequests_supported_types", "")}
@@ -259,6 +266,11 @@ trait APIMethods210 {
               transDetailsJson <- transactionRequestType.value match {
                 case "SANDBOX_TAN" => tryo {
                   json.extract[TransactionRequestDetailsSandBoxTanJSON]
+                } ?~ {
+                  ErrorMessages.InvalidJsonFormat
+                }
+                case "COUNTERPARTY" => tryo {
+                  json.extract[TransactionRequestDetailsCounterpartyJSON]
                 } ?~ {
                   ErrorMessages.InvalidJsonFormat
                 }
@@ -276,13 +288,15 @@ trait APIMethods210 {
 
               transDetails <- transactionRequestType.value match {
                 case "SANDBOX_TAN" => tryo{getTransactionRequestDetailsSandBoxTanFromJson(transDetailsJson.asInstanceOf[TransactionRequestDetailsSandBoxTanJSON])}
+                case "COUNTERPARTY" => tryo{getTransactionRequestDetailsCounterpartyFromJson(transDetailsJson.asInstanceOf[TransactionRequestDetailsCounterpartyJSON])}
                 case "SEPA" => tryo{getTransactionRequestDetailsSEPAFromJson(transDetailsJson.asInstanceOf[TransactionRequestDetailsSEPAJSON])}
                 case "FREE_FORM" => tryo{getTransactionRequestDetailsFreeFormFromJson(transDetailsJson.asInstanceOf[TransactionRequestDetailsFreeFormJSON])}
               }
 
-              fromBank <- Bank(bankId) ?~! {ErrorMessages.BankNotFound}
-              fromAccount <- BankAccount(bankId, accountId) ?~! {ErrorMessages.AccountNotFound}
-              isOwnerOrHasEntitlement <- booleanToBox(u.ownerAccess(fromAccount) == true || hasEntitlement(fromAccount.bankId.value, u.userId, CanCreateAnyTransactionRequest) == true , ErrorMessages.InsufficientAuthorisationToCreateTransactionRequest)
+
+              //Check the validate for amount and currency
+              isValidAmountNumber <-  tryo(BigDecimal(transDetails.value.amount)) ?~!ErrorMessages.InvalidNumber
+              isValidCurrencyISOCode <- tryo(assert(isValidCurrencyISOCode(transDetails.value.currency)))?~!ErrorMessages.InvalidISOCurrencyCode
 
               // Prevent default value for transaction request type (at least).
               transferCurrencyEqual <- tryo(assert(transDetailsJson.value.currency == fromAccount.currency)) ?~! {s"${ErrorMessages.InvalidTransactionRequestCurrency} From Account Currency is ${fromAccount.currency} Requested Transaction Currency is: ${transDetailsJson.value.currency}"}
@@ -302,12 +316,36 @@ trait APIMethods210 {
                     }
                     createdTransactionRequest <- Connector.connector.vend.createTransactionRequestv210(u, fromAccount, Full(toAccount), transactionRequestType, transDetails, transDetailsSerialized)
                   } yield createdTransactionRequest
+                }
+                case "COUNTERPARTY" => {
+                  for {
+                  //For COUNTERPARTY, Use the counterpartyId to find the counterparty and set up the toAacount
+                    toCounterpartyId<- Full(transDetailsJson.asInstanceOf[TransactionRequestDetailsCounterpartyJSON].to.counterpartyId)
+                    counterparty <- Connector.connector.vend.getCounterpartyByCounterpartyId(CounterpartyId(toCounterpartyId)) ?~! {ErrorMessages.CounterpartyNotFoundByCounterpartyId}
+                    isBeneficiary <- booleanToBox(counterparty.isBeneficiary == true , ErrorMessages.CounterpartyBeneficiaryPermit)
+                    toBankId <- Full(BankId(counterparty.otherBankId ))
+                    toAccountId <- Full(AccountId(counterparty.otherAccountId))
+                    toAccount <- BankAccount(toBankId, toAccountId) ?~! {ErrorMessages.BankAccountNotFound}
+
+                    // Following four lines: just transfer the details body ,add Bank_Id and Account_Id in the Detail part.
+                    transactionRequestAccountJSON = TransactionRequestAccountJSON(toBankId.value, toAccountId.value)
+                    detailDescription = transDetailsJson.asInstanceOf[TransactionRequestDetailsCounterpartyJSON].description
+                    transactionRequestDetailsCounterpartyResponseJSON = TransactionRequestDetailsCounterpartyResponseJSON(toCounterpartyId.toString,transactionRequestAccountJSON, amountOfMoneyJSON, detailDescription.toString)
+                    transResponseDetails = getTransactionRequestDetailsCounterpartyResponseFromJson(transactionRequestDetailsCounterpartyResponseJSON)
+
+                    //Serialize the new format COUNTERPARTY data.
+                    transDetailsResponseSerialized <-tryo{
+                      implicit val formats = Serialization.formats(NoTypeHints)
+                      write(transResponseDetails)
+                    }
+                    createdTransactionRequest <- Connector.connector.vend.createTransactionRequestv210(u, fromAccount, Full(toAccount), transactionRequestType, transResponseDetails, transDetailsResponseSerialized)
+                  } yield createdTransactionRequest
 
                 }
                 case "SEPA" => {
                   for {
-                  //for SEPA, the user do not send the Bank_ID and Acound_ID,so this will search for the bank firstly.
-                    toIban<-  Full(transDetailsJson.asInstanceOf[TransactionRequestDetailsSEPAJSON].iban)
+                    //For SEPA, Use the iban to find the counterparty and set up the toAccount
+                    toIban<-  Full(transDetailsJson.asInstanceOf[TransactionRequestDetailsSEPAJSON].to.iban)
                     counterparty <- Counterparties.counterparties.vend.getCounterpartyByIban(toIban) ?~! {ErrorMessages.CounterpartyNotFoundByIban}
                     isBeneficiary <- booleanToBox(counterparty.isBeneficiary == true , ErrorMessages.CounterpartyBeneficiaryPermit)
                     toBankId <- Full(BankId(counterparty.otherBankId ))
@@ -332,7 +370,7 @@ trait APIMethods210 {
                   for {
                     // Following three lines: just transfer the details body ,add Bank_Id and Account_Id in the Detail part.
                     transactionRequestAccountJSON <- Full(TransactionRequestAccountJSON(fromAccount.bankId.value, fromAccount.accountId.value))
-                    // the Free form the discription is empty, so make it "" in the following code
+                    // The FREE_FORM discription is empty, so make it "" in the following code
                     transactionRequestDetailsFreeFormResponseJSON = TransactionRequestDetailsFreeFormResponseJSON(transactionRequestAccountJSON,amountOfMoneyJSON,"")
                     transResponseDetails <- Full(getTransactionRequestDetailsFreeFormResponseJson(transactionRequestDetailsFreeFormResponseJSON))
 
@@ -378,6 +416,8 @@ trait APIMethods210 {
           if (Props.getBool("transactionRequests_enabled", false)) {
             for {
               u: User <- user ?~ ErrorMessages.UserNotLoggedIn
+              isValidAccountIdFormat <- tryo(assert(isValidID(accountId.value)))?~! ErrorMessages.InvalidAccountIdFormat
+              isValidBankIdFormat <- tryo(assert(isValidID(bankId.value)))?~! ErrorMessages.InvalidBankIdFormat
               fromBank <- Bank(bankId) ?~! {ErrorMessages.BankNotFound}
               fromAccount <- BankAccount(bankId, accountId) ?~! {"Unknown bank account"}
               view <- tryo(fromAccount.permittedViews(user).find(_ == viewId)) ?~ {"Current user does not have access to the view " + viewId}
@@ -689,6 +729,7 @@ trait APIMethods210 {
         user =>
           for {
             u <- user ?~! ErrorMessages.UserNotLoggedIn
+            isValidBankIdFormat <- tryo(assert(isValidID(bankId.value)))?~! ErrorMessages.InvalidBankIdFormat
             canCreateCardsForBank <- booleanToBox(hasEntitlement("", u.userId, CanCreateCardsForBank), s"CanCreateCardsForBank entitlement required")
             postJson <- tryo {json.extract[PostPhysicalCardJSON]} ?~ {ErrorMessages.InvalidJsonFormat}
             postedAllows <- postJson.allows match {
@@ -998,11 +1039,34 @@ trait APIMethods210 {
       "Create counterparty for an account",
       s"""Create counterparty.
           |
+          |Counterparties are created for the account / view
+          |They are how the user of the view (e.g. account owner) refers to the other side of the transaction
+          |
+          |name is the human readable name (e.g. Piano teacher, Miss Nipa)
+          |
+          |other_bank_id is an (internal) ID for the bank of the bank of the counterparty (if known)
+          |
+          |other_account_id is an (internal) ID for the bank account of the counterparty (if known)
+          |
+          |other_account_provider is a code that tells the system where that bank is hosted. Will be OBP if its known to the API. Usage of this flag (in API / connectors) is work in progress.
+          |
+          |account_routing_scheme is a code that dictates the nature of the account_routing_address e.g. IBAN
+          |
+          |account_routing_address is an instance of account_routing_scheme that can be used to route payments to external systems. e.g. an IBAN number
+          |
+          |bank_routing_scheme is a code that dictates the nature of the bank_routing_address e.g. "BIC",
+          |
+          |bank_routing_address is an instance of bank_routing_scheme
+          |
+          |is_beneficiary must be set to true in order to send payments to this counterparty
+          |
+          |The view specified by VIEW_ID must have the canCreateCounterparty permission
+          |
           |${authenticationRequiredMessage(true)}
           |""",
       Extraction.decompose(PostCounterpartyJSON(
-        name = "",
-        other_bank_id ="",
+        name="",
+        other_bank_id="",
         other_account_id="12345",
         other_account_provider="OBP",
         account_routing_scheme="IBAN",
@@ -1022,9 +1086,15 @@ trait APIMethods210 {
         user =>
           for {
             u <- user ?~! ErrorMessages.UserNotLoggedIn
+            isValidAccountIdFormat <- tryo(assert(isValidID(accountId.value)))?~! ErrorMessages.InvalidAccountIdFormat
+            isValidBankIdFormat <- tryo(assert(isValidID(bankId.value)))?~! ErrorMessages.InvalidBankIdFormat
             bank <- Bank(bankId) ?~! ErrorMessages.BankNotFound
             account <- BankAccount(bankId, AccountId(accountId.value)) ?~! {ErrorMessages.AccountNotFound}
             postJson <- tryo {json.extract[PostCounterpartyJSON]} ?~ {ErrorMessages.InvalidJsonFormat}
+            availableViews <- Full(account.permittedViews(user))
+            view <- View.fromUrl(viewId, account) ?~! {ErrorMessages.ViewNotFound}
+            canUserAccessView <- tryo(availableViews.find(_ == viewId)) ?~ {"Current user does not have access to the view " + viewId}
+            canCreateCounterparty <- booleanToBox(view.canCreateCounterparty == true, "Current view does not have permission for the action")
             checkAvailable <- tryo(assert(Counterparties.counterparties.vend.
               checkCounterpartyAvailable(postJson.name,bankId.value, accountId.value,viewId.value) == true)
             ) ?~! ErrorMessages.CounterpartyAlreadyExists
@@ -1035,16 +1105,13 @@ trait APIMethods210 {
               name=postJson.name,
               otherBankId =postJson.other_bank_id,
               otherAccountId =postJson.other_account_id,
-              accountRoutingScheme=postJson.account_routing_scheme,
-              accountRoutingAddress=postJson.account_routing_address,
-              bankRoutingScheme=postJson.bank_routing_scheme,
-              bankRoutingAddress=postJson.bank_routing_address,
+              otherAccountRoutingScheme=postJson.account_routing_scheme,
+              otherAccountRoutingAddress=postJson.account_routing_address,
+              otherBankRoutingScheme=postJson.bank_routing_scheme,
+              otherBankRoutingAddress=postJson.bank_routing_address,
               isBeneficiary=postJson.is_beneficiary
             )
             metadata <- Counterparties.counterparties.vend.getMetadata(bankId, accountId, couterparty.counterPartyId) ?~ "Cannot find the metadata"
-            availableViews <- Full(account.permittedViews(user))
-            view <- View.fromUrl(viewId, account) ?~! {ErrorMessages.ViewNotFound}
-            canUserAccessView <- tryo(availableViews.find(_ == viewId)) ?~ {"Current user does not have access to the view " + viewId}
             moderated <- Connector.connector.vend.getCounterparty(bankId, accountId, couterparty.counterPartyId).flatMap(oAcc => view.moderate(oAcc))
           } yield {
             val list = createCounterpartJSON(moderated, metadata, couterparty)
@@ -1099,6 +1166,7 @@ trait APIMethods210 {
         user =>
           for {
             u <- user ?~! "User must be logged in to post Customer" // TODO. CHECK user has role to create a customer / create a customer for another user id.
+            isValidBankIdFormat <- tryo(assert(isValidID(bankId.value)))?~! ErrorMessages.InvalidBankIdFormat
             bank <- Bank(bankId) ?~! {ErrorMessages.BankNotFound}
             postedData <- tryo{json.extract[PostCustomerJson]} ?~! ErrorMessages.InvalidJsonFormat
             requiredEntitlements = CanCreateCustomer ::
@@ -1222,11 +1290,11 @@ trait APIMethods210 {
          |${authenticationRequiredMessage(true)}
          |""",
       Extraction.decompose(BranchJsonPut("gh.29.fi", "OBP",
-        SandboxAddressImport("VALTATIE 8", "", "", "AKAA", "", "", "37800", ""),
-        SandboxLocationImport(1.2, 2.1),
-        SandboxMetaImport(SandboxLicenseImport("","")),
-        Option(SandboxLobbyImport("")),
-        Option(SandboxDriveUpImport(""))
+        AddressJson("VALTATIE 8", "", "", "AKAA", "", "", "37800"),
+        LocationJson(1.2, 2.1),
+        MetaJson(LicenseJson("","")),
+        LobbyJson(""),
+        DriveUpJson("")
       )),
       emptyObjectJson,
       emptyObjectJson :: Nil,
@@ -1263,11 +1331,11 @@ trait APIMethods210 {
           |${authenticationRequiredMessage(true)}
           |""",
       Extraction.decompose(BranchJsonPost("123","gh.29.fi", "OBP",
-        SandboxAddressImport("VALTATIE 8", "", "", "AKAA", "", "", "37800", ""),
-        SandboxLocationImport(1.2, 2.1),
-        SandboxMetaImport(SandboxLicenseImport("","")),
-        Option(SandboxLobbyImport("")),
-        Option(SandboxDriveUpImport(""))
+        AddressJson("VALTATIE 8", "", "", "AKAA", "", "", "37800"),
+        LocationJson(1.2, 2.1),
+        MetaJson(LicenseJson("", "")),
+        LobbyJson(""),
+        DriveUpJson("")
       )),
       emptyObjectJson,
       emptyObjectJson :: Nil,

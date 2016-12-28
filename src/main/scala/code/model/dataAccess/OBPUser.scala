@@ -33,10 +33,10 @@ package code.model.dataAccess
 
 import java.util.UUID
 
+import code.api.util.APIUtil
 import code.api.{DirectLogin, OAuthHandshake}
 import code.bankconnectors.Connector
 import net.liftweb.common._
-import net.liftweb.http.js.JsCmds.FocusOnLoad
 import net.liftweb.http.{S, SHtml, SessionVar, Templates}
 import net.liftweb.mapper._
 import net.liftweb.util.Mailer.{BCC, From, Subject, To}
@@ -159,6 +159,8 @@ class OBPUser extends MegaProtoUser[OBPUser] with Logger {
 object OBPUser extends OBPUser with MetaMegaProtoUser[OBPUser]{
 import net.liftweb.util.Helpers._
 
+  val connector = Props.get("connector").openOrThrowException("no connector set")
+
   override def emailFrom = Props.get("mail.users.userinfo.sender.address", "sender-not-set")
 
   override def dbTableName = "users" // define the DB table name
@@ -177,6 +179,7 @@ import net.liftweb.util.Helpers._
         "#loginText * " #> {S.?("log.in")} &
         "#usernameText * " #> {S.?("username")} &
         "#passwordText * " #> {S.?("password")} &
+        "autocomplete=off [autocomplete] " #> APIUtil.getAutocompleteValue &
         "#recoverPasswordLink * " #> {
           "a [href]" #> {lostPasswordPath.mkString("/", "/", "")} &
           "a *" #> {S.?("recover.password")}
@@ -222,6 +225,15 @@ import net.liftweb.util.Helpers._
   }
 
   /**
+    * The string that's generated when the user name is not found.  By
+    * default: S.?("email.address.not.found")
+    * The function is overridden in order to prevent leak of information at password reset page if username / email exists or do not exist.
+    * I.e. we want to prevent case in which an anonymous user can get information from the message does some username/email exist or no in our system.
+    */
+  override def userNameNotFoundString: String = "Thank you. If we found a matching user, password reset instructions have been sent."
+
+
+  /**
    * Overridden to use the hostname set in the props file
    */
   override def sendPasswordReset(name: String) {
@@ -236,7 +248,7 @@ import net.liftweb.util.Helpers._
             generateResetEmailBodies(user, resetLink) :::
             (bccEmail.toList.map(BCC(_))) :_*)
 
-        S.notice(S.?("password.reset.email.sent"))
+        S.notice(S.?(userNameNotFoundString))
         S.redirectTo(homePage)
 
       case Full(user) =>
@@ -343,7 +355,7 @@ import net.liftweb.util.Helpers._
 
   def getAPIUserId(name: String, password: String): Box[Long] = {
     findUserByUsername(name) match {
-      case Full(user) => {
+      case Full(user) =>
         if (user.validated_? &&
           user.getProvider() == Props.get("hostname","") &&
           user.testPassword(Full(password)))
@@ -351,23 +363,29 @@ import net.liftweb.util.Helpers._
           Full(user.user)
         }
         else {
-          if (Props.getBool("kafka.user.authentication", false)) {
-          Props.get("connector").openOrThrowException("no connector set").startsWith("kafka") match {
-            case true =>
-              for { kafkaUser <- getUserFromKafka(name, password)
-                    kafkaUserId <- tryo{kafkaUser.user} } yield kafkaUserId.toLong
-            case false => Empty
+          connector match {
+            case "kafka" =>
+              if (Props.getBool("kafka.user.authentication", false))
+                for { kafkaUser <- getUserFromConnector(name, password)
+                      kafkaUserId <- tryo{kafkaUser.user} } yield kafkaUserId.toLong
+              else
+                Empty
+            case "obpjvm" =>
+              if (Props.getBool("obpjvm.user.authentication", false))
+                for { obpjvmUser <- getUserFromConnector(name, password)
+                      obpjvmUserId <- tryo{obpjvmUser.user} } yield obpjvmUserId.toLong
+              else
+                Empty
+            case _ => Empty
           }
-        } else {
-            Empty }
         }
-      }
-      case _ => Empty 
+
+      case _ => Empty
     }
   }
 
 
-  def getUserFromKafka(name: String, password: String):Box[OBPUser] = {
+  def getUserFromConnector(name: String, password: String):Box[OBPUser] = {
     Connector.connector.vend.getUser(name, password) match {
       case Full(Connector.connector.vend.InboundUser(extEmail, extPassword, extUsername)) => {
         info("external user authenticated. login redir: " + loginRedirect.get)
@@ -379,12 +397,13 @@ import net.liftweb.util.Helpers._
             homePage
         }
 
-        val extProvider = Props.get("connector").openOrThrowException("no connector set")
+        val extProvider = connector
 
         val user = findUserByUsername(name) match {
           // Check if the external user is already created locally
-          case Full(user) if user.validated_? &&
-            user.provider == extProvider => {
+          case Full(user) if user.validated_?
+            // && user.provider == extProvider
+            => {
             // Return existing user if found
             info("external user already exists locally, using that one")
             user
@@ -419,13 +438,14 @@ import net.liftweb.util.Helpers._
 
   //overridden to allow a redirection if login fails
   override def login = {
-    if (S.post_?) {
-      S.param("username").
-      flatMap(name => findUserByUsername(name)) match {
-        case Full(user) if user.validated_? &&
-          // Check if user came from localhost
-          user.getProvider() == Props.get("hostname","") &&
-          user.testPassword(S.param("password")) => {
+    def loginAction = {
+      if (S.post_?) {
+        S.param("username").
+          flatMap(name => findUserByUsername(name)) match {
+          case Full(user) if user.validated_? &&
+            // Check if user came from localhost
+            user.getProvider() == Props.get("hostname","") &&
+            user.testPassword(S.param("password")) => {
             val preLoginState = capturePreLoginState()
             info("login redir: " + loginRedirect.get)
             val redir = loginRedirect.get match {
@@ -443,51 +463,58 @@ import net.liftweb.util.Helpers._
             })
           }
 
-        case Full(user) if !user.validated_? =>
-          S.error(S.?("account.validation.error"))
+          case Full(user) if !user.validated_? =>
+            S.error(S.?("account.validation.error"))
 
-        case _ => if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka"))
-        {
-          // If not found locally, try to authenticate user via Kafka, if enabled in props
-          if (Props.getBool("kafka.user.authentication", false)) {
-            val preLoginState = capturePreLoginState()
-            info("login redir: " + loginRedirect.get)
-            val redir = loginRedirect.get match {
-              case Full(url) =>
-                loginRedirect(Empty)
-              url
-              case _ =>
-                homePage
-            }
-            for {
-              user_ <- externalUserHelper(S.param("username").getOrElse(""), S.param("password").getOrElse(""))
-            } yield {
-              logUserIn(user_, () => {
-                S.notice(S.?("logged.in"))
-                preLoginState()
-                S.redirectTo(redir)
-              })
+          case _ => if (connector == "kafka" || connector == "obpjvm")
+          {
+            // If not found locally, try to authenticate user via Kafka, if enabled in props
+            if (Props.getBool("kafka.user.authentication", false) ||
+              Props.getBool("obpjvm.user.authentication", false)) {
+              val preLoginState = capturePreLoginState()
+              info("login redir: " + loginRedirect.get)
+              val redir = loginRedirect.get match {
+                case Full(url) =>
+                  loginRedirect(Empty)
+                  url
+                case _ =>
+                  homePage
+              }
+              for {
+                user_ <- externalUserHelper(S.param("username").getOrElse(""), S.param("password").getOrElse(""))
+              } yield {
+                logUserIn(user_, () => {
+                  S.notice(S.?("logged.in"))
+                  preLoginState()
+                  S.redirectTo(redir)
+                })
+              }
+            } else {
+              S.error(S.?("account.validation.error"))
             }
           } else {
             S.error(S.?("account.validation.error"))
           }
-        } else {
-          S.error(S.?("account.validation.error"))
         }
       }
     }
 
+    // In this function we bind submit button to loginAction function.
+    // In case that unique token of submit button cannot be paired submit action will be omitted.
+    // Implemented in order to prevent a CSRF attack
+    def insertSubmitButton = {
+      scala.xml.XML.loadString(loginSubmitButton(S.?("Login"), loginAction _).toString().replace("type=\"submit\"","class=\"submit\" type=\"submit\""))
+    }
+
     bind("user", loginXhtml,
-         "username" -> (FocusOnLoad(<input type="text" name="username"/>)),
-         "password" -> (<input type="password" name="password"/>),
-         "submit" -> loginSubmitButton(S.?("log.in")))
+         "submit" -> insertSubmitButton)
   }
 
 
   def externalUserHelper(name: String, password: String): Box[OBPUser] = {
-    if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka")) {
+    if (connector == "kafka" || connector == "obpjvm") {
       for {
-       user <- getUserFromKafka(name, password)
+       user <- getUserFromConnector(name, password)
        u <- APIUser.find(By(APIUser.name_, user.username))
        v <- tryo {Connector.connector.vend.updateUserAccountViews(u)}
       } yield {
@@ -498,7 +525,7 @@ import net.liftweb.util.Helpers._
 
 
   def registeredUserHelper(username: String) = {
-    if (Props.get("connector").openOrThrowException("no connector set").startsWith("kafka")) {
+    if (connector == "kafka" || connector == "obpjvm") {
       for {
        u <- APIUser.find(By(APIUser.name_, username))
        v <- tryo {Connector.connector.vend.updateUserAccountViews(u)}

@@ -10,7 +10,7 @@ import code.branches.MappedBranch
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
 import code.metadata.comments.MappedComment
-import code.metadata.counterparties.Counterparties
+import code.metadata.counterparties.{Counterparties, CounterpartyTrait, MappedCounterparty}
 import code.metadata.narrative.MappedNarrative
 import code.metadata.tags.MappedTag
 import code.metadata.transactionimages.MappedTransactionImage
@@ -24,6 +24,7 @@ import code.transaction.MappedTransaction
 import code.transactionrequests.MappedTransactionRequest
 import code.transactionrequests.TransactionRequests._
 import code.util.Helper
+import code.views.Views
 import com.tesobe.model.UpdateBankAccount
 import net.liftweb.common._
 import net.liftweb.mapper.{By, _}
@@ -67,17 +68,17 @@ object LocalMappedConnector extends Connector with Loggable {
   override def getBanks: List[Bank] =
     MappedBank.findAll
 
-  override def getTransaction(bankId: BankId, accountID: AccountId, transactionId: TransactionId): Box[Transaction] = {
+  override def getTransaction(bankId: BankId, accountId: AccountId, transactionId: TransactionId): Box[Transaction] = {
 
-    updateAccountTransactions(bankId, accountID)
+    updateAccountTransactions(bankId, accountId)
 
     MappedTransaction.find(
       By(MappedTransaction.bank, bankId.value),
-      By(MappedTransaction.account, accountID.value),
+      By(MappedTransaction.account, accountId.value),
       By(MappedTransaction.transactionId, transactionId.value)).flatMap(_.toTransaction)
   }
 
-  override def getTransactions(bankId: BankId, accountID: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]] = {
+  override def getTransactions(bankId: BankId, accountId: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]] = {
     val limit = queryParams.collect { case OBPLimit(value) => MaxRows[MappedTransaction](value) }.headOption
     val offset = queryParams.collect { case OBPOffset(value) => StartAt[MappedTransaction](value) }.headOption
     val fromDate = queryParams.collect { case OBPFromDate(date) => By_>=(MappedTransaction.tFinishDate, date) }.headOption
@@ -92,13 +93,13 @@ object LocalMappedConnector extends Connector with Loggable {
     }
 
     val optionalParams : Seq[QueryParam[MappedTransaction]] = Seq(limit.toSeq, offset.toSeq, fromDate.toSeq, toDate.toSeq, ordering.toSeq).flatten
-    val mapperParams = Seq(By(MappedTransaction.bank, bankId.value), By(MappedTransaction.account, accountID.value)) ++ optionalParams
+    val mapperParams = Seq(By(MappedTransaction.bank, bankId.value), By(MappedTransaction.account, accountId.value)) ++ optionalParams
 
     val mappedTransactions = MappedTransaction.findAll(mapperParams: _*)
 
-    updateAccountTransactions(bankId, accountID)
+    updateAccountTransactions(bankId, accountId)
 
-    for (account <- getBankAccount(bankId, accountID))
+    for (account <- getBankAccount(bankId, accountId))
       yield mappedTransactions.flatMap(_.toTransaction(account))
   }
 
@@ -139,10 +140,10 @@ object LocalMappedConnector extends Connector with Loggable {
   }
 
   //gets the users who are the legal owners/holders of the account
-  override def getAccountHolders(bankId: BankId, accountID: AccountId): Set[User] =
+  override def getAccountHolders(bankId: BankId, accountId: AccountId): Set[User] =
     MappedAccountHolder.findAll(
       By(MappedAccountHolder.accountBankPermalink, bankId.value),
-      By(MappedAccountHolder.accountPermalink, accountID.value)).map(accHolder => accHolder.user.obj).flatten.toSet
+      By(MappedAccountHolder.accountPermalink, accountId.value)).map(accHolder => accHolder.user.obj).flatten.toSet
 
 
   def getCounterpartyFromTransaction(thisAccountBankId: BankId, thisAccountId: AccountId, metadata: CounterpartyMetadata): Box[Counterparty] = {
@@ -160,19 +161,19 @@ object LocalMappedConnector extends Connector with Loggable {
         counterPartyId = metadata.metadataId,
         label = metadata.getHolder,
         nationalIdentifier = t.counterpartyNationalId.get,
-        bankRoutingAddress = None,
-        accountRoutingAddress = t.getCounterpartyIban(),
-        otherBankId = metadata.getAccountNumber,
-        thisBankId = t.counterpartyBankName.get,
+        otherBankRoutingAddress = None,
+        otherAccountRoutingAddress = t.getCounterpartyIban(),
+        thisAccountId = AccountId(metadata.getAccountNumber),
+        thisBankId = BankId(t.counterpartyBankName.get),
         kind = t.counterpartyAccountKind.get,
-        thisAccountId = thisAccountBankId,
+        otherBankId = thisAccountBankId,
         otherAccountId = thisAccountId,
         alreadyFoundMetadata = Some(metadata),
 
         //TODO V210 following five fields are new, need to be fiexed
         name = "",
-        bankRoutingScheme = "",
-        accountRoutingScheme="",
+        otherBankRoutingScheme = "",
+        otherAccountRoutingScheme="",
         otherAccountProvider = "",
         isBeneficiary = true
       )
@@ -180,13 +181,13 @@ object LocalMappedConnector extends Connector with Loggable {
   }
 
   // Get all counterparties related to an account
-  override def getCounterpartiesFromTransaction(bankId: BankId, accountID: AccountId): List[Counterparty] =
-  Counterparties.counterparties.vend.getMetadatas(bankId, accountID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
+  override def getCounterpartiesFromTransaction(bankId: BankId, accountId: AccountId): List[Counterparty] =
+  Counterparties.counterparties.vend.getMetadatas(bankId, accountId).flatMap(getCounterpartyFromTransaction(bankId, accountId, _))
 
   // Get one counterparty related to a bank account
-  override def getCounterpartyFromTransaction(bankId: BankId, accountID: AccountId, counterpartyID: String): Box[Counterparty] =
+  override def getCounterpartyFromTransaction(bankId: BankId, accountId: AccountId, counterpartyID: String): Box[Counterparty] =
   // Get the metadata and pass it to getOtherBankAccount to construct the other account.
-  Counterparties.counterparties.vend.getMetadata(bankId, accountID, counterpartyID).flatMap(getCounterpartyFromTransaction(bankId, accountID, _))
+  Counterparties.counterparties.vend.getMetadata(bankId, accountId, counterpartyID).flatMap(getCounterpartyFromTransaction(bankId, accountId, _))
 
 
   def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = {
@@ -198,23 +199,27 @@ object LocalMappedConnector extends Connector with Loggable {
         counterPartyId = t.metadataId,
         label = t.getHolder,
         nationalIdentifier = "",
-        bankRoutingAddress = None,
-        accountRoutingAddress = None,
-        otherBankId = t.getAccountNumber,
-        thisBankId = "",
+        otherBankRoutingAddress = None,
+        otherAccountRoutingAddress = None,
+        thisAccountId = AccountId(t.getAccountNumber),
+        thisBankId = BankId(""),
         kind = "",
-        thisAccountId = thisAccountBankId,
+        otherBankId = thisAccountBankId,
         otherAccountId = thisAccountId,
         alreadyFoundMetadata = Some(t),
 
         //TODO V210 following five fields are new, need to be fiexed
         name = "",
-        bankRoutingScheme = "",
-        accountRoutingScheme="",
+        otherBankRoutingScheme = "",
+        otherAccountRoutingScheme="",
         otherAccountProvider = "",
         isBeneficiary = true
       )
     }
+  }
+
+  def getCounterpartyByCounterpartyId(counterpartyId: CounterpartyId): Box[CounterpartyTrait] ={
+    MappedCounterparty.find(By(MappedCounterparty.mCounterPartyId, counterpartyId.value))
   }
 
 
@@ -571,23 +576,11 @@ Store one or more transactions
       By(MappedTransaction.account, accountId.value)
     )
 
-    //remove view privileges (get views first)
-    val views = ViewImpl.findAll(
-      By(ViewImpl.bankPermalink, bankId.value),
-      By(ViewImpl.accountPermalink, accountId.value)
-    )
-
-    //loop over them and delete
-    var privilegesDeleted = true
-    views.map (x => {
-      privilegesDeleted &&= ViewPrivileges.bulkDelete_!!(By(ViewPrivileges.view, x.id_))
-    })
+    //remove view privileges
+    val privilegesDeleted = Views.views.vend.removeAllPermissions(bankId, accountId)
 
     //delete views of account
-    val viewsDeleted = ViewImpl.bulkDelete_!!(
-      By(ViewImpl.bankPermalink, bankId.value),
-      By(ViewImpl.accountPermalink, accountId.value)
-    )
+    val viewsDeleted = Views.views.vend.removeAllViews(bankId, accountId)
 
     //delete account
     val account = MappedBankAccount.find(
@@ -798,9 +791,6 @@ Store one or more transactions
 
   override def createOrUpdateBranch(branch: BranchJsonPost): Box[Branch] = {
 
-    val lobbyHours =  if (branch.lobby.isDefined) {branch.lobby.get.hours.toString} else ""
-    val driveUpHours =  if (branch.driveUp.isDefined) {branch.driveUp.get.hours.toString} else ""
-
     //check the branch existence and update or insert data
     getBranch(BankId(branch.bank_id), BranchId(branch.id)) match {
       case Full(mappedBranch) =>
@@ -813,16 +803,15 @@ Store one or more transactions
             .mLine2(branch.address.line_2)
             .mLine3(branch.address.line_3)
             .mCity(branch.address.city)
-            .mCounty(branch.address.county)
+            .mCounty(branch.address.country)
             .mState(branch.address.state)
-            .mPostCode(branch.address.post_code)
-            .mCountryCode(branch.address.country_code)
+            .mPostCode(branch.address.postcode)
             .mlocationLatitude(branch.location.latitude)
             .mlocationLongitude(branch.location.longitude)
             .mLicenseId(branch.meta.license.id)
             .mLicenseName(branch.meta.license.name)
-            .mLobbyHours(lobbyHours)
-            .mDriveUpHours(driveUpHours)
+            .mLobbyHours(branch.lobby.hours)
+            .mDriveUpHours(branch.driveUp.hours)
             .saveMe()
         } ?~! ErrorMessages.CreateBranchUpdateError
       case _ =>
@@ -835,16 +824,15 @@ Store one or more transactions
             .mLine2(branch.address.line_2)
             .mLine3(branch.address.line_3)
             .mCity(branch.address.city)
-            .mCounty(branch.address.county)
+            .mCounty(branch.address.country)
             .mState(branch.address.state)
-            .mPostCode(branch.address.post_code)
-            .mCountryCode(branch.address.country_code)
+            .mPostCode(branch.address.postcode)
             .mlocationLatitude(branch.location.latitude)
             .mlocationLongitude(branch.location.longitude)
             .mLicenseId(branch.meta.license.id)
             .mLicenseName(branch.meta.license.name)
-            .mLobbyHours(lobbyHours)
-            .mDriveUpHours(driveUpHours)
+            .mLobbyHours(branch.lobby.hours)
+            .mDriveUpHours(branch.driveUp.hours)
             .saveMe()
         } ?~! ErrorMessages.CreateBranchInsertError
     }

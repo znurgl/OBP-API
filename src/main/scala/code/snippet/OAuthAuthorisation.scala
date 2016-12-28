@@ -35,11 +35,12 @@ Email: contact@tesobe.com
 package code.snippet
 
 import code.util.Helper
-import net.liftweb.common.{Failure, Full, Empty}
+import net.liftweb.common.{Empty, Failure, Full}
 import net.liftweb.http.S
-import code.model.{Nonce, Consumer, Token}
+import code.model.{Consumer, Nonce, Token}
 import net.liftweb.mapper.By
 import java.util.Date
+import code.api.util.APIUtil
 import net.liftweb.util.{CssSel, Helpers, Props}
 import code.model.TokenType
 import code.model.dataAccess.OBPUser
@@ -165,8 +166,21 @@ object OAuthAuthorisation {
       validTokenCase(token, tokenParam)
     }
 
+    // In this function we bind submit button to loginAction function.
+    // In case that unique token of submit button cannot be paired submit action will be omitted.
+    // Please note that unique token is obtained by responce from OBPUser.login function.
+    def getSubmitButtonWithValidLoginToken = {
+      val allInputFields = (OBPUser.login \\ "input")
+      val submitFields = allInputFields.filter(e => e.\@("type").equalsIgnoreCase("submit"))
+      val extractToken = submitFields.map(e => e.\@("name"))
+      val submitElem = """<input class="submit" type="submit" value="Login" tabindex="4" name="submitButton"/>""".replace("submitButton", extractToken.headOption.getOrElse(""))
+      scala.xml.XML.loadString(submitElem)
+    }
+
     cssSel match {
-      case Full(sel) => sel
+      case Full(sel) => sel &
+                        "type=submit" #> getSubmitButtonWithValidLoginToken &
+                        "autocomplete=off [autocomplete] " #> APIUtil.getAutocompleteValue
       case Failure(msg, _, _) => error(msg)
       case _ => error("unknown error")
     }

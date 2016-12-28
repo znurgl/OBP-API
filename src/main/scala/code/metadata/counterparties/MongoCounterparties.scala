@@ -37,7 +37,7 @@ object MongoCounterparties extends Counterparties with Loggable {
 
     val metadata = existing match {
       case Full(m) => m
-      case _ => createMetadata(originalPartyBankId, originalPartyAccountId, otherParty.label, otherParty.otherBankId)
+      case _ => createMetadata(originalPartyBankId, originalPartyAccountId, otherParty.label, otherParty.thisAccountId.value)
     }
 
     metadata
@@ -113,10 +113,10 @@ object MongoCounterparties extends Counterparties with Loggable {
                                    name: String,
                                    otherBankId: String,
                                    otherAccountId: String,
-                                   accountRoutingScheme: String,
-                                   accountRoutingAddress: String,
-                                   bankRoutingScheme: String,
-                                   bankRoutingAddress: String,
+                                   otherAccountRoutingScheme: String,
+                                   otherAccountRoutingAddress: String,
+                                   otherBankRoutingScheme: String,
+                                   otherBankRoutingAddress: String,
                                    isBeneficiary: Boolean
                                  ): Box[CounterpartyTrait] = Empty
 

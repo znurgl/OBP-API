@@ -8,7 +8,7 @@ import code.branches.Branches.{Branch, BranchId}
 import code.branches.MappedBranch
 import code.fx.fx
 import code.management.ImporterAPI.ImporterTransaction
-import code.metadata.counterparties.{Counterparties, Metadata, MongoCounterparties}
+import code.metadata.counterparties.{Counterparties, CounterpartyTrait, Metadata, MongoCounterparties}
 import code.model._
 import code.model.dataAccess._
 import code.products.Products.ProductCode
@@ -123,6 +123,8 @@ private object LocalConnector extends Connector with Loggable {
 
   def getCounterparty(thisAccountBankId: BankId, thisAccountId: AccountId, couterpartyId: String): Box[Counterparty] = Empty
 
+  def getCounterpartyByCounterpartyId(counterpartyId: CounterpartyId): Box[CounterpartyTrait] =Empty
+
   override def getTransactions(bankId: BankId, accountId: AccountId, queryParams: OBPQueryParam*): Box[List[Transaction]] = {
     logger.debug("getTransactions for " + bankId + "/" + accountId)
     for{
@@ -175,10 +177,10 @@ private object LocalConnector extends Connector with Loggable {
     Empty
   }
 
-  override def getAccountHolders(bankId: BankId, accountID: AccountId) : Set[User] = {
+  override def getAccountHolders(bankId: BankId, accountId: AccountId) : Set[User] = {
     MappedAccountHolder.findAll(
       By(MappedAccountHolder.accountBankPermalink, bankId.value),
-      By(MappedAccountHolder.accountPermalink, accountID.value)).map(accHolder => accHolder.user.obj).flatten.toSet
+      By(MappedAccountHolder.accountPermalink, accountId.value)).map(accHolder => accHolder.user.obj).flatten.toSet
   }
 
   override protected def makePaymentImpl(fromAccount : Account, toAccount : Account, amt : BigDecimal, description: String) : Box[TransactionId] = {
@@ -228,19 +230,19 @@ private object LocalConnector extends Connector with Loggable {
       counterPartyId = metadata.metadataId,
       label = otherAccount_.holder.get,
       nationalIdentifier = otherAccount_.bank.get.national_identifier.get,
-      bankRoutingAddress = None, //TODO: need to add this to the json/model
-      accountRoutingAddress = Some(otherAccount_.bank.get.IBAN.get),
-      otherBankId = otherAccount_.number.get,
-      thisBankId = otherAccount_.bank.get.name.get,
+      otherBankRoutingAddress = None, //TODO: need to add this to the json/model
+      otherAccountRoutingAddress = Some(otherAccount_.bank.get.IBAN.get),
+      thisAccountId = AccountId(otherAccount_.number.get),
+      thisBankId = BankId(otherAccount_.bank.get.name.get),
       kind = otherAccount_.kind.get,
-      thisAccountId = theAccount.bankId,
+      otherBankId = theAccount.bankId,
       otherAccountId = theAccount.accountId,
       alreadyFoundMetadata = Some(metadata),
 
       //TODO V210 following five fields are new, need to be fiexed
       name = "",
-      bankRoutingScheme = "",
-      accountRoutingScheme="",
+      otherBankRoutingScheme = "",
+      otherAccountRoutingScheme="",
       otherAccountProvider = "",
       isBeneficiary = true
     )
@@ -385,19 +387,19 @@ private object LocalConnector extends Connector with Loggable {
       counterPartyId = otherAccount.metadataId,
       label = otherAccount.getHolder,
       nationalIdentifier = otherAccountFromTransaction.bank.get.national_identifier.get,
-      bankRoutingAddress = None, //TODO: need to add this to the json/model
-      accountRoutingAddress = Some(otherAccountFromTransaction.bank.get.IBAN.get),
-      otherBankId = otherAccountFromTransaction.number.get,
-      thisBankId = otherAccountFromTransaction.bank.get.name.get,
+      otherBankRoutingAddress = None, //TODO: need to add this to the json/model
+      otherAccountRoutingAddress = Some(otherAccountFromTransaction.bank.get.IBAN.get),
+      thisAccountId = AccountId(otherAccountFromTransaction.number.get),
+      thisBankId = BankId(otherAccountFromTransaction.bank.get.name.get),
       kind = "",
-      thisAccountId = originalPartyBankId,
+      otherBankId = originalPartyBankId,
       otherAccountId = originalPartyAccountId,
       alreadyFoundMetadata = Some(otherAccount),
 
       //TODO V210 following five fields are new, need to be fiexed
       name = "",
-      bankRoutingScheme = "",
-      accountRoutingScheme="",
+      otherBankRoutingScheme = "",
+      otherAccountRoutingScheme="",
       otherAccountProvider = "",
       isBeneficiary = true
     )

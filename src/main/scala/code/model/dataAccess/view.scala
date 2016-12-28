@@ -134,6 +134,7 @@ class ViewImpl extends View with LongKeyedMapper[ViewImpl] with ManyToMany with 
     canAddPhysicalLocation_(actions.exists(_ == "can_add_physical_location"))
     canAddPublicAlias_(actions.exists(_ == "can_add_public_alias"))
     canAddPrivateAlias_(actions.exists(_ == "can_add_private_alias"))
+    canCreateCounterparty_(actions.exists(_ == "can_create_counterparty"))
     canDeleteCorporateLocation_(actions.exists(_ == "can_delete_corporate_location"))
     canDeletePhysicalLocation_(actions.exists(_ == "can_delete_physical_location"))
     canEditOwnerComment_(actions.exists(_ == "can_edit_narrative"))
@@ -307,6 +308,9 @@ class ViewImpl extends View with LongKeyedMapper[ViewImpl] with ManyToMany with 
   object canAddPrivateAlias_ extends MappedBoolean(this){
     override def defaultValue = false
   }
+  object canCreateCounterparty_ extends MappedBoolean(this){
+    override def defaultValue = true
+  }
   object canDeleteCorporateLocation_ extends MappedBoolean(this){
     override def defaultValue = false
   }
@@ -421,6 +425,7 @@ class ViewImpl extends View with LongKeyedMapper[ViewImpl] with ManyToMany with 
   def canAddPhysicalLocation : Boolean = canAddPhysicalLocation_.get
   def canAddPublicAlias : Boolean = canAddPublicAlias_.get
   def canAddPrivateAlias : Boolean = canAddPrivateAlias_.get
+  def canCreateCounterparty : Boolean = canCreateCounterparty_.get
   def canDeleteCorporateLocation : Boolean = canDeleteCorporateLocation_.get
   def canDeletePhysicalLocation : Boolean = canDeletePhysicalLocation_.get
 
@@ -445,7 +450,7 @@ object ViewImpl extends ViewImpl with LongKeyedMetaMapper[ViewImpl]{
   override def dbIndexes = Index(permalink_, bankPermalink, accountPermalink) :: super.dbIndexes
 
   def find(viewUID : ViewUID) : Box[ViewImpl] = {
-    ViewImpl.find(By(ViewImpl.permalink_, viewUID.viewId.value) :: accountFilter(viewUID.bankId, viewUID.accountId): _*) ~>
+    find(By(permalink_, viewUID.viewId.value) :: accountFilter(viewUID.bankId, viewUID.accountId): _*) ~>
       APIFailure(s"View with permalink $viewId not found", 404)
     //TODO: APIFailures with http response codes belong at a higher level in the code
   }
@@ -455,12 +460,11 @@ object ViewImpl extends ViewImpl with LongKeyedMetaMapper[ViewImpl]{
   }
 
   def accountFilter(bankId : BankId, accountId : AccountId) : List[QueryParam[ViewImpl]] = {
-    By(ViewImpl.bankPermalink, bankId.value) :: By(ViewImpl.accountPermalink, accountId.value) :: Nil
+    By(bankPermalink, bankId.value) :: By(accountPermalink, accountId.value) :: Nil
   }
 
   def unsavedOwnerView(bankId : BankId, accountId: AccountId, description: String) : ViewImpl = {
-    ViewImpl
-      .create
+      create
       .bankPermalink(bankId.value)
       .accountPermalink(accountId.value)
       .name_("Owner")
@@ -518,6 +522,7 @@ object ViewImpl extends ViewImpl with LongKeyedMetaMapper[ViewImpl]{
       .canAddPhysicalLocation_(true)
       .canAddPublicAlias_(true)
       .canAddPrivateAlias_(true)
+      .canCreateCounterparty_(true)
       .canDeleteCorporateLocation_(true)
       .canDeletePhysicalLocation_(true)
       .canEditOwnerComment_(true)
@@ -538,7 +543,7 @@ object ViewImpl extends ViewImpl with LongKeyedMetaMapper[ViewImpl]{
   }
 
   def unsavedDefaultPublicView(bankId : BankId, accountId: AccountId, description: String) : ViewImpl = {
-    ViewImpl.create.
+      create.
       name_("Public").
       description_(description).
       permalink_("public").
@@ -596,6 +601,7 @@ object ViewImpl extends ViewImpl with LongKeyedMetaMapper[ViewImpl]{
       canAddPhysicalLocation_(true).
       canAddPublicAlias_(true).
       canAddPrivateAlias_(true).
+      canCreateCounterparty_(true).
       canDeleteCorporateLocation_(true).
       canDeletePhysicalLocation_(true).
       canEditOwnerComment_(true).
@@ -619,7 +625,7 @@ Accountants
   */
 
   def unsavedDefaultAccountantsView(bankId : BankId, accountId: AccountId, description: String) : ViewImpl = {
-    ViewImpl.create.
+      create.
       name_("Accountant"). // Use the singular form
       description_(description).
       permalink_("accountant"). // Use the singular form
@@ -677,6 +683,7 @@ Accountants
       canAddPhysicalLocation_(true).
       canAddPublicAlias_(true).
       canAddPrivateAlias_(true).
+      canCreateCounterparty_(true).
       canDeleteCorporateLocation_(true).
       canDeletePhysicalLocation_(true).
       canEditOwnerComment_(true).
@@ -701,7 +708,7 @@ Auditors
  */
 
   def unsavedDefaultAuditorsView(bankId : BankId, accountId: AccountId, description: String) : ViewImpl = {
-    ViewImpl.create.
+      create.
       name_("Auditor"). // Use the singular form
       description_(description).
       permalink_("auditor"). // Use the singular form
@@ -759,6 +766,7 @@ Auditors
       canAddPhysicalLocation_(true).
       canAddPublicAlias_(true).
       canAddPrivateAlias_(true).
+      canCreateCounterparty_(true).
       canDeleteCorporateLocation_(true).
       canDeletePhysicalLocation_(true).
       canEditOwnerComment_(true).
